@@ -6,7 +6,29 @@
 
 - (NSArray *)specifiers {
     if (!_specifiers) {
-        _specifiers = [self loadSpecifiersFromPlistName:@"Root" target:self];
+        NSMutableArray *arr = [[self loadSpecifiersFromPlistName:@"Root" target:self] mutableCopy];
+
+        // 把上一次弹出音量时抓到的 HUD 结构贴在这里。
+        // 出问题直接截图，不用连电脑、不用 Frida。
+        NSUserDefaults *ud = [[NSUserDefaults alloc] initWithSuiteName:@"com.shiyi.volumeglass"];
+        NSArray *lines = [ud objectForKey:@"Diag"];
+        if ([lines isKindOfClass:[NSArray class]] && lines.count) {
+            PSSpecifier *g = [PSSpecifier groupSpecifierWithName:@"HUD 结构（上次弹出音量时抓的）"];
+            [g setProperty:@"host=宿主   .=子层  s=兄弟  ^-1..=祖先。BG 表示这层有不透明底色，就是那个框。"
+                    forKey:@"footerText"];
+            [arr addObject:g];
+            for (NSString *ln in lines) {
+                PSSpecifier *s = [PSSpecifier preferenceSpecifierNamed:ln
+                                                                target:nil
+                                                                   set:nil
+                                                                   get:nil
+                                                                detail:nil
+                                                                  cell:PSStaticTextCell
+                                                                  edit:nil];
+                [arr addObject:s];
+            }
+        }
+        _specifiers = arr;
     }
     return _specifiers;
 }

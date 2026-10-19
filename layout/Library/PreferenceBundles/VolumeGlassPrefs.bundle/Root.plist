@@ -8,7 +8,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>音量玻璃 0.2.0</string>
+			<string>音量玻璃 0.2.1</string>
 			<key>footerText</key>
 			<string>只作用于系统音量 HUD（按音量键弹出的那个窗口）。改完按一下音量键即可看到效果，不需要注销。</string>
 		</dict>

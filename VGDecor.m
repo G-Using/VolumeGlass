@@ -191,6 +191,8 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
 @property (nonatomic, assign) BOOL origMasks;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *haloSnapshots;
 @property (nonatomic, assign) CGFloat lastHaloRadius;
+@property (nonatomic, assign) CGSize lastHaloSize;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *bgSnapshots;  // 被清掉底色的祖先
 @property (nonatomic, weak) UIView *nativeSkin;      // 系统自带的那层方形底板
 @property (nonatomic, assign) CGFloat origSkinAlpha; // 它原来的透明度
 @property (nonatomic, assign) BOOL skinHidden;
@@ -332,6 +334,81 @@ static void VGApplySkinReplace(UIView *host, VGDecorState *st) {
     VGLog(@"skin replaced: %@", NSStringFromClass([skin class]));
 }
 
+#pragma mark - 清掉祖先的底色（那个"框"真正的来源）
+
+// 胶囊外面套着的那圈更大的方框，往往不是独立视图，而是某一层的 backgroundColor。
+// 清 backgroundColor 不影响它的子视图，比 alpha=0 安全得多——
+// alpha=0 会把整个子树（包括我们自己的宿主和填充条）一起弄没。
+static void VGClearAncestorBackgrounds(UIView *host, VGDecorState *st) {
+    if (!st) return;
+    if (!st.bgSnapshots) st.bgSnapshots = [NSMutableArray array];
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+
+    UIView *anc = host.superview;
+    for (NSUInteger i = 0; i < 4 && anc; i++, anc = anc.superview) {
+        CGSize s = anc.bounds.size;
+        if (s.width <= 0 || s.height <= 0) continue;
+        if (s.width > 600 || s.height > 600) break;
+
+        CGRect hf = [host convertRect:host.bounds toView:anc];
+        if (!CGRectContainsRect(CGRectInset(anc.bounds, -1, -1), hf)) continue;
+
+        UIColor *bg = anc.backgroundColor;
+        if (!bg) continue;
+        if (CGColorGetAlpha(bg.CGColor) < 0.01) continue;
+
+        [st.bgSnapshots addObject:@{ @"v": anc, @"bg": bg }];
+        anc.backgroundColor = [UIColor clearColor];
+        VGLog(@"clear bg: %@", NSStringFromClass([anc class]));
+    }
+
+    [CATransaction commit];
+}
+
+#pragma mark - 结构诊断（写进设置面板，用户直接截图）
+
+static NSString *VGDiagLine(UIView *v, NSString *tag) {
+    UIColor *bg = v.backgroundColor;
+    NSString *bgs = @"nil";
+    if (bg) bgs = (CGColorGetAlpha(bg.CGColor) < 0.01) ? @"clear" : @"BG";
+    CGSize s = v.bounds.size;
+    return [NSString stringWithFormat:@"%@ %@ %.0fx%.0f %@",
+            tag, NSStringFromClass([v class]), s.width, s.height, bgs];
+}
+
+static void VGSaveDiag(UIView *host) {
+    if (!host) return;
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    [lines addObject:[NSString stringWithFormat:@"host %@ %.0fx%.0f",
+                      NSStringFromClass([host class]),
+                      host.bounds.size.width, host.bounds.size.height]];
+
+    NSUInteger n = 0;
+    for (UIView *s in host.subviews) {
+        if (n++ >= 6) break;
+        [lines addObject:VGDiagLine(s, @" .")];
+    }
+    n = 0;
+    UIView *sup = host.superview;
+    if (sup) {
+        for (UIView *s in sup.subviews) {
+            if (s == host) continue;
+            if (n++ >= 6) break;
+            [lines addObject:VGDiagLine(s, @" s")];
+        }
+    }
+    UIView *anc = sup;
+    for (int i = 0; i < 5 && anc; i++, anc = anc.superview) {
+        [lines addObject:VGDiagLine(anc, [NSString stringWithFormat:@"^%d", -(i + 1)])];
+    }
+
+    NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:VGDomain];
+    [d setObject:lines forKey:@"Diag"];
+    [d synchronize];
+}
+
 #pragma mark - 消除容器自带的外发光（真正的那圈"虚影"）
 
 // 系统 HUD 容器自己带一层阴影/外发光，外面那层皮还是原来那个胶囊形状。
@@ -384,9 +461,15 @@ static CGFloat VGPadAroundHost(UIView *host, UIView *anc) {
 
 static void VGApplyHaloFix(UIView *host, CGFloat radius, VGDecorState *st) {
     if (!st) return;
-    // 布局回调是高频的，参数没变就别每次都拆了重建
-    if (st.haloSnapshots.count > 0 && fabs(st.lastHaloRadius - radius) < 0.5) return;
+    // 布局回调是高频的，参数没变就别每次都拆了重建。
+    // 注意 size 也要参与判断：首次调用时 bounds 可能还是 0，
+    // 只比 radius 的话会把"找不到祖先"这个结果一直缓存下去。
+    CGSize hs = host.bounds.size;
+    if (st.haloSnapshots.count > 0 &&
+        fabs(st.lastHaloRadius - radius) < 0.5 &&
+        CGSizeEqualToSize(st.lastHaloSize, hs)) return;
     st.lastHaloRadius = radius;
+    st.lastHaloSize = hs;
 
     if (!st.haloSnapshots) {
         st.haloSnapshots = [NSMutableArray array];
@@ -445,6 +528,12 @@ void VGTeardownHUDView(UIView *host) {
     if (st.nativeSkin && st.skinHidden) st.nativeSkin.alpha = st.origSkinAlpha;
     st.nativeSkin = nil;
     st.skinHidden = NO;
+
+    for (NSDictionary *d in st.bgSnapshots) {
+        UIView *v = d[@"v"];
+        if (v) v.backgroundColor = d[@"bg"];
+    }
+    [st.bgSnapshots removeAllObjects];
 
     host.layer.cornerRadius = st.origRadius;
     host.layer.masksToBounds = st.origMasks;
@@ -570,6 +659,9 @@ void VGDecorateHUDView(UIView *host) {
         VGLog(@"decorate host=%@ bounds=%@", NSStringFromClass([host class]),
               NSStringFromCGRect(host.bounds));
 
+        // 把结构写进设置面板，下次出问题不用猜也不用 Frida
+        VGSaveDiag(host);
+
         if (VGSlideIn()) VGPlaySlideIn(host);
     }
 
@@ -597,6 +689,8 @@ void VGDecorateHUDView(UIView *host) {
     // 关键一步：先把系统那层方形底板换掉。
     // 不换的话，圆角外面永远露着方底的四条边——那圈"虚影"就是这么来的。
     VGApplySkinReplace(host, st);
+    // 再把祖先链上那些"方框底色"清掉（胶囊外圈那层更大的浅色框）
+    VGClearAncestorBackgrounds(host, st);
 
     // 底板没了就没人提供"存在感"，这里给玻璃托个底：
     // 底色至少 0.16，并且补一层模糊，否则整个 HUD 会透得看不见。
