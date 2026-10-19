@@ -282,7 +282,7 @@ static void VGPlaySlideIn(UIView *host) {
     move.fromValue = @(-offset);
     move.toValue = @0;
     move.duration = 0.34;
-    move.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.18f, 0.92f, 0.20f, 1.0f];
+    move.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
     [layer addAnimation:move forKey:@"vg.slideIn"];
 
     CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
