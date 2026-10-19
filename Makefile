@@ -21,6 +21,8 @@ VolumeGlassPrefs_INSTALL_PATH = /Library/PreferenceBundles
 VolumeGlassPrefs_FRAMEWORKS = UIKit
 VolumeGlassPrefs_PRIVATE_FRAMEWORKS = Preferences
 VolumeGlassPrefs_CFLAGS = -fobjc-arc
+# theos 只发 -framework 不发 -F，私有框架搜索路径要自己补
+VolumeGlassPrefs_LDFLAGS = -F$(TARGET_PRIVATE_FRAMEWORK_PATH)
 
 include $(THEOS_MAKE_PATH)/bundle.mk
 
