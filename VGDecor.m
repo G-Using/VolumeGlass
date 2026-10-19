@@ -330,7 +330,7 @@ static void VGApplyHaloFix(UIView *host, CGFloat radius, VGDecorState *st) {
         anc.layer.shadowOpacity = 0;
         anc.layer.shadowRadius  = 0;
 
-        VGLog(@"消虚影：%@ pad=%.1f -> r=%.1f",
+        VGLog(@"halo: %@ pad=%.1f -> r=%.1f",
               NSStringFromClass([anc class]), pad, radius + MAX(pad, 0));
     }
 
@@ -428,7 +428,7 @@ void VGDecorateHUDView(UIView *host) {
 
     if (!VGSizeLooksLikeHUD(host)) {
         if (host.bounds.size.width > 420 || host.bounds.size.height > 420) {
-            VGLog(@"%@ bounds=%@ 不像 HUD，跳过（把向上层数调小）",
+            VGLog(@"skip %@ bounds=%@ (looks not HUD, lower LevelUp)",
                   NSStringFromClass([host class]), NSStringFromCGRect(host.bounds));
         }
         return;
@@ -439,7 +439,7 @@ void VGDecorateHUDView(UIView *host) {
 
     VGDecorState *st = objc_getAssociatedObject(host, kVGStateKey);
     if (!st && VGHasDecoratedRelative(host)) {
-        VGLog(@"%@ 的父子层已处理，跳过", NSStringFromClass([host class]));
+        VGLog(@"skip %@ (relative already decorated)", NSStringFromClass([host class]));
         return;
     }
 
@@ -470,7 +470,7 @@ void VGDecorateHUDView(UIView *host) {
         NSHashTable *set = VGDecoratedTable();
         [set addObject:host];
 
-        VGLog(@"装饰 host=%@ bounds=%@", NSStringFromClass([host class]),
+        VGLog(@"decorate host=%@ bounds=%@", NSStringFromClass([host class]),
               NSStringFromCGRect(host.bounds));
 
         if (VGSlideIn()) VGPlaySlideIn(host);

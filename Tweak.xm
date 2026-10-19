@@ -28,7 +28,7 @@ static void VGInstall(Class cls, SEL sel, IMP replacement) {
     if (!cls) return;
     Method m = class_getInstanceMethod(cls, sel);
     if (!m) {
-        VGLog(@"%@ 没有 %@，跳过", NSStringFromClass(cls), NSStringFromSelector(sel));
+        VGLog(@"%@ has no %@, skip", NSStringFromClass(cls), NSStringFromSelector(sel));
         return;
     }
     IMP orig = NULL;
@@ -36,7 +36,7 @@ static void VGInstall(Class cls, SEL sel, IMP replacement) {
     if (orig) {
         NSString *key = [NSString stringWithFormat:@"%@|%@", NSStringFromClass(cls), NSStringFromSelector(sel)];
         gOriginals[key] = [NSValue valueWithPointer:(void *)orig];
-        VGLog(@"已挂 %@ %@", NSStringFromClass(cls), NSStringFromSelector(sel));
+        VGLog(@"hooked %@ %@", NSStringFromClass(cls), NSStringFromSelector(sel));
     }
 }
 
@@ -50,7 +50,7 @@ static UIView *VGFindHost(UIView *root, NSInteger extra) {
         for (UIView *v = root; v; v = v.superview) {
             if ([NSStringFromClass([v class]) isEqualToString:want]) return v;
         }
-        VGLog(@"ClassOverride=%@ 没找到，回退到层数策略", want);
+        VGLog(@"ClassOverride=%@ not found, fallback to LevelUp", want);
     }
 
     UIView *v = root;
@@ -107,7 +107,7 @@ static void vg_viewWillAppear(id self, SEL _cmd, BOOL animated) {
     if (!VGEnabled()) return;
     UIViewController *vc = (UIViewController *)self;
     if (!VGShouldApply(vc)) {
-        VGLog(@"%@ 判定为亮度 HUD，跳过", NSStringFromClass([vc class]));
+        VGLog(@"%@ is brightness HUD, skip", NSStringFromClass([vc class]));
         return;
     }
     UIView *root = [vc view];
@@ -162,7 +162,7 @@ __attribute__((constructor)) static void VGInit(void) {
         VGInstall(hud, @selector(viewWillAppear:), (IMP)vg_viewWillAppear);
         VGInstall(hud, @selector(viewDidLayoutSubviews), (IMP)vg_viewDidLayout);
     } else {
-        VGLog(@"没有 SBElasticHUDViewController，走 slider 兜底");
+        VGLog(@"no SBElasticHUDViewController, use slider fallback");
     }
 
     NSArray *fallbacks = @[@"SBElasticSliderView", @"SBElasticVolumeSliderView", @"_CCUIBaseSliderContentView"];
@@ -175,7 +175,7 @@ __attribute__((constructor)) static void VGInit(void) {
     if (override.length) {
         Class c = objc_getClass(override.UTF8String);
         if (c) VGInstall(c, @selector(layoutSubviews), (IMP)vg_sliderLayout);
-        else VGLog(@"ClassOverride %@ 不存在", override);
+        else VGLog(@"ClassOverride %@ not exist", override);
     }
 
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
@@ -183,5 +183,5 @@ __attribute__((constructor)) static void VGInit(void) {
                                     (__bridge CFStringRef)VGChangedNotification,
                                     NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    VGLog(@"VolumeGlass 0.1.3 已加载");
+    VGLog(@"VolumeGlass 0.1.4 loaded");
 }

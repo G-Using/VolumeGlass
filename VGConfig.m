@@ -74,8 +74,15 @@ NSString *VGClassOverride(void) {
 }
 
 void VGLog(NSString *fmt, ...) {
-    static int cachedDebug = -1;
-    if (cachedDebug == -1) cachedDebug = VGDebugEnabled() ? 1 : 0;
+    // 以前这里把 Debug 只读一次，结果设置里打开日志之后
+    // SpringBoard 里早就缓存成"关"，按音量键永远看不到输出。
+    static CFTimeInterval lastCheck = -1;
+    static int cachedDebug = 0;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (lastCheck < 0 || now - lastCheck > 1.0) {
+        lastCheck = now;
+        cachedDebug = VGDebugEnabled() ? 1 : 0;
+    }
     if (cachedDebug != 1) return;
     va_list ap;
     va_start(ap, fmt);
