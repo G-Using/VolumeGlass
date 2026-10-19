@@ -280,20 +280,52 @@ static BOOL VGLooksLikeSkin(UIView *v) {
     return NO;
 }
 
+// 我们自己造的视图一律别碰（VGGlassBackdrop 类名里就带 "Backdrop"，
+// 不排除掉的话会被当成系统底板关掉，玻璃直接消失）。
+static BOOL VGIsOurs(UIView *v) {
+    NSString *cn = NSStringFromClass([v class]);
+    return [cn hasPrefix:@"VG"];
+}
+
+// 里面装着文字/图标的绝对不能用 alpha=0 关掉——那会把音量数字一起藏了。
+// 这类材质层只能留在原地，靠别的方式处理。
+static BOOL VGCarriesContent(UIView *v) {
+    for (UIView *s in v.subviews) {
+        if ([s isKindOfClass:[UILabel class]] ||
+            [s isKindOfClass:[UIImageView class]] ||
+            [s isKindOfClass:[UITextView class]]) return YES;
+        if (VGCarriesContent(s)) return YES;
+    }
+    return NO;
+}
+
+// 递归往里找"和宿主一样大的材质层"。
+// 真机诊断看到 SBElasticVolumeSliderView 内部还有一个 MTMaterialView 7x134 a1.00，
+// 它才是那圈材质边的来源；只扫兄弟层永远扫不到它。
+static void VGCollectSkinsInside(UIView *v, CGSize hs, NSMutableArray<UIView *> *out, int depth) {
+    if (depth <= 0) return;
+    for (UIView *s in v.subviews) {
+        if (s.hidden || VGIsOurs(s)) continue;
+        CGSize sz = s.bounds.size;
+        if (sz.width + 1 >= hs.width && sz.height + 1 >= hs.height &&
+            VGLooksLikeSkin(s) && !VGCarriesContent(s)) {
+            [out addObject:s];
+        }
+        VGCollectSkinsInside(s, hs, out, depth - 1);
+    }
+}
+
 static NSArray<UIView *> *VGFindNativeSkins(UIView *host) {
     NSMutableArray<UIView *> *out = [NSMutableArray array];
     if (!host) return out;
     CGSize hs = host.bounds.size;
 
-    // 兄弟层：按类名找材质底板，**全部**收进来。
-    // 真机结构里同时存在 MTMaterialView / UIView / MTMaterialView 三个平级兄弟，
-    // 只关第一个的话另外两个的材质边还会露出来。
-    // 注意别再扩大范围去关"所有同尺寸兄弟"——那个普通 UIView 实测没有子图层，
-    // 它不画东西；一刀切会把音量条的填充一起弄没（0.2.6 的教训）。
+    // 1) 兄弟层：按类名找材质底板。真机结构里同时存在
+    //    MTMaterialView / UIView / MTMaterialView 三个平级兄弟。
     UIView *super = host.superview;
     if (super) {
         for (UIView *sib in super.subviews) {
-            if (sib == host || sib.hidden) continue;
+            if (sib == host || sib.hidden || VGIsOurs(sib)) continue;
             if (!VGLooksLikeSkin(sib)) continue;
             CGSize s = sib.bounds.size;
             if (s.width <= 0.5 || s.height <= 0.5) continue;
@@ -301,17 +333,11 @@ static NSArray<UIView *> *VGFindNativeSkins(UIView *host) {
             [out addObject:sib];
         }
     }
-    if (out.count) return out;
 
-    // 内部层
-    for (UIView *sub in host.subviews) {
-        if (!VGLooksLikeSkin(sub)) continue;
-        CGSize s = sub.bounds.size;
-        if (s.width <= 0.5 || s.height <= 0.5) continue;
-        [out addObject:sub];
-    }
+    // 2) 内部层：**不再因为找到兄弟就提前返回**，两个方向都要扫。
+    VGCollectSkinsInside(host, hs, out, 3);
 
-    // 祖先不处理：宿主是它的后代，alpha=0 会把整个 HUD 弄没
+    // 3) 祖先不处理：宿主是它的后代，alpha=0 会把整个 HUD 弄没
     return out;
 }
 
