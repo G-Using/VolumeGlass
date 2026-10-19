@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  deb:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 Theos
+        run: |
+          brew install ldid xz
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
+          mkdir -p "$HOME/theos/sdks"
+          URL="https://github.com/theos/sdks/releases/download/master/iPhoneOS16.5.sdk.tar.xz"
+          if curl -fsSL -o /tmp/sdk.tar.xz "$URL"; then
+            tar -xf /tmp/sdk.tar.xz -C "$HOME/theos/sdks"
+          else
+            git clone --depth 1 https://github.com/theos/sdks.git /tmp/sdks
+            cp -R /tmp/sdks/iPhoneOS16.5.sdk "$HOME/theos/sdks/" || cp -R /tmp/sdks/*.sdk "$HOME/theos/sdks/"
+          fi
+
+      - name: 编译打包
+        run: |
+          export THEOS="$HOME/theos"
+          make package FINALPACKAGE=1
+          ls -la packages/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VolumeGlass-deb
+          path: packages/*.deb
