@@ -219,6 +219,7 @@ static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *bgSnapshots;  // 被清掉底色/边框的层
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *skinSnapshots; // 被关掉的原生底板（可能有多个）
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *markSnapshots;  // 排查用的彩色描边
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *borderSnapshots; // 被清掉的 borderWidth（兄弟层/容器）
 @property (nonatomic, assign) BOOL skinHidden;
 @end
 
@@ -228,6 +229,9 @@ static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
 static const void *kVGStateKey = &kVGStateKey;
 static const void *kVGSubviewOrigKey = &kVGSubviewOrigKey;
 static __weak UIView *gLastHost = nil;
+
+// 前置声明：VGApplySkinReplace 里要还原描边，函数体在后面
+static void VGRestoreBorders(VGDecorState *st);
 
 static NSHashTable *VGDecoratedTable(void) {
     static NSHashTable *table;
@@ -367,6 +371,7 @@ static void VGApplySkinReplace(UIView *host, VGDecorState *st) {
             if (v) v.alpha = [d[@"a"] doubleValue];
         }
         [st.skinSnapshots removeAllObjects];
+        VGRestoreBorders(st);
         st.skinHidden = NO;
         return;
     }
@@ -457,6 +462,89 @@ static void VGClearAncestorBackgrounds(UIView *host, VGDecorState *st) {
     }
 
     [CATransaction commit];
+}
+
+#pragma mark - 清掉兄弟层的描边（"尖尖的"真正来源）
+
+// 真机诊断（0.3.0 前）抓到的最后一行结构是：
+//
+//     s MTMaterialView 7x134 nil b1.5 a0.00
+//     s UIView        7x134 nil b1.5 a1.00   ← 这层一直在画
+//     s MTMaterialView 7x134 nil b1.5 a0.00
+//
+// 三个平级兄弟全都带 b1.5 —— borderWidth 1.5pt。
+// 而宿主本身只有 **7pt 宽**，左右各 1.5pt 的描边就吃掉 3pt，整条只剩一条亮线；
+// 圆角一收口，两端就挤成"尖"。这不是圆角算错，是这圈描边太宽。
+//
+// 所以这里只做一件事：把宿主周围（兄弟层 + 近两层祖先）的 borderWidth 归零。
+// **不动 alpha、不动 backgroundColor**，因此不可能把音量数字/填充条弄没
+// —— 0.2.6 那种"整条同尺寸兄弟一律 alpha=0"的写法会顺带毁掉颜色，不再重犯。
+static void VGStripBordersAround(UIView *host, VGDecorState *st) {
+    if (!host || !st) return;
+    if (!st.borderSnapshots) st.borderSnapshots = [NSMutableArray array];
+
+    NSMutableArray<UIView *> *targets = [NSMutableArray array];
+    [targets addObject:host];
+
+    UIView *sup = host.superview;
+    if (sup) {
+        for (UIView *sib in sup.subviews) {
+            if (sib == host || VGIsOurs(sib)) continue;
+            CGSize s = sib.bounds.size;
+            if (s.width <= 0.5 || s.height <= 0.5) continue;
+            if (s.width > 700 || s.height > 700) continue;
+            // 只要"不比宿主小多少"的兄弟，别去动整个 HUD 容器里的无关视图
+            CGSize hs = host.bounds.size;
+            if (s.width + 8 < hs.width || s.height + 8 < hs.height) continue;
+            [targets addObject:sib];
+        }
+    }
+
+    UIView *anc = sup;
+    for (int i = 0; i < 2 && anc; i++, anc = anc.superview) {
+        CGSize s = anc.bounds.size;
+        if (s.width <= 0.5 || s.height <= 0.5) continue;
+        if (s.width > 700 || s.height > 700) break;
+        [targets addObject:anc];
+    }
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    for (UIView *v in targets) {
+        CGFloat bw = v.layer.borderWidth;
+        if (bw <= 0.01) continue;
+
+        BOOL known = NO;
+        for (NSDictionary *d in st.borderSnapshots) {
+            if (d[@"v"] == v) { known = YES; break; }
+        }
+        if (!known) {
+            UIColor *bc = v.layer.borderColor ? [UIColor colorWithCGColor:v.layer.borderColor] : nil;
+            [st.borderSnapshots addObject:@{
+                @"v" : v,
+                @"w" : @(bw),
+                @"c" : bc ? (id)bc : (id)[NSNull null]
+            }];
+        }
+        v.layer.borderWidth = 0;
+        VGLog(@"border off: %@ %.1f", NSStringFromClass([v class]), bw);
+    }
+    [CATransaction commit];
+}
+
+static void VGRestoreBorders(VGDecorState *st) {
+    if (!st.borderSnapshots.count) return;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    for (NSDictionary *d in st.borderSnapshots) {
+        UIView *v = d[@"v"];
+        if (!v) continue;
+        v.layer.borderWidth = [d[@"w"] doubleValue];
+        id c = d[@"c"];
+        v.layer.borderColor = [c isKindOfClass:[UIColor class]] ? ((UIColor *)c).CGColor : NULL;
+    }
+    [CATransaction commit];
+    [st.borderSnapshots removeAllObjects];
 }
 
 #pragma mark - 结构诊断（写进设置面板，用户直接截图）
@@ -895,12 +983,25 @@ void VGDecorateHUDView(UIView *host) {
     VGApplySkinReplace(host, st);
     // 再把祖先链上那些"方框底色"清掉（胶囊外圈那层更大的浅色框）
     VGClearAncestorBackgrounds(host, st);
+    // 最后清掉兄弟层身上的 1.5pt 描边 —— 收缩态那个"尖尖的"就是它
+    if (VGReplaceSkin()) VGStripBordersAround(host, st);
+    else VGRestoreBorders(st);
 
     // 底板没了就没人提供"存在感"，这里给玻璃托个底。
     // 但**不再强开模糊**——那样"额外模糊"开关等于失效，画面会一片发白。
     CGFloat tint = VGTintAlpha();
     BOOL blur = VGExtraBlur();
     if (st.skinHidden && tint < 0.10) tint = 0.10;
+
+    // 收缩态那条只有 7pt 宽。这种宽度下任何一条 1pt 边的占比都超过 7%，
+    // 收口处必然被看成"尖"。既然去不掉，就按用户给的办法——**直接填满**：
+    // 把底色抬到接近实心，整条变成一个实心胶囊，边缘那点差异就被吃掉了。
+    // 只在"比手指还窄"时生效，展开态（29pt 以上）不受影响。
+    CGFloat shortSide = MIN(host.bounds.size.width, host.bounds.size.height);
+    BOOL narrow = (shortSide > 0.5 && shortSide < 16.0);
+    if (VGFillNarrow() && narrow) {
+        tint = MAX(tint, 0.46);
+    }
 
     [st.backdrop applyRadius:radius tint:tint blur:blur];
     st.rim.hidden = !VGRimEnabled();

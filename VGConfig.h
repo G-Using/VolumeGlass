@@ -20,6 +20,7 @@ BOOL    VGReplaceSkin(void);              // 关掉系统那层方形底板，�
 BOOL    VGHideGlass(void);                // 排查用：不画我们的玻璃，只看系统原样，默认 NO
 BOOL    VGMarkFrames(void);               // 排查用：给可疑容器描不同颜色的边，默认 NO
 BOOL    VGDeepClean(void);                // 连宿主内部的材质槽一起关，默认 NO（关了音量填充看不见）
+BOOL    VGFillNarrow(void);               // 收缩态(比手指还窄)时把底色填实，避免只剩一条细边，默认 YES
 
 CGFloat VGRadius(void);                   // 旧版绝对值圆角，默认 26，范围 0~60
 CGFloat VGCornerPercent(void);            // 圆角大小占胶囊半径的百分比，默认 100（完全胶囊）

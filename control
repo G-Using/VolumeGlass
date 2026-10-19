@@ -1,6 +1,6 @@
 Package: com.shiyi.volumeglass
 Name: 音量玻璃
-Version: 0.2.9
+Version: 0.3.0
 Architecture: iphoneos-arm
 Description: 给系统音量 HUD 加大圆角 + 玻璃描边/高光，半径与强度可调。
 Maintainer: shiyi
