@@ -9,7 +9,7 @@ extern NSString *const VGDomain;          // com.shiyi.volumeglass
 extern NSString *const VGChangedNotification;
 
 BOOL    VGEnabled(void);                  // 总开关，默认 YES
-BOOL    VGRimEnabled(void);               // 玻璃描边，默认 YES
+BOOL    VGRimEnabled(void);               // 玻璃描边，默认 NO（那圈边会让收缩态出尖角）
 BOOL    VGExtraBlur(void);                // 额外加一层模糊，默认 NO
 BOOL    VGApplyToBrightness(void);        // 亮度 HUD 也应用，默认 NO
 BOOL    VGDebugEnabled(void);             // 日志，默认 NO
@@ -27,6 +27,9 @@ NSInteger VGLevelUp(void);                // 从 HUD 根视图向上找几层，
 NSString *VGClassOverride(void);
 
 void    VGLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
+
+// 版本升级时铺一遍新默认值（老版本存的 Tint/Rim 会把新默认盖掉）
+void    VGConfigMigrate(void);
 
 #ifdef __cplusplus
 }

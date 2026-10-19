@@ -503,6 +503,8 @@ static void VGPlaySlideIn(UIView *host) {
 void VGDecorateHUDView(UIView *host) {
     if (!host) return;
 
+    VGConfigMigrate();      // 一次性的默认值迁移，老配置不会盖掉新默认
+
     if (!VGStyleActive()) {
         VGTeardownHUDView(host);
         return;
