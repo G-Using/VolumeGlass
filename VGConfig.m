@@ -39,6 +39,8 @@ BOOL    VGAutoCapsule(void)       { return VGBool(@"AutoCapsule", YES); }
 BOOL    VGSlideIn(void)           { return VGBool(@"SlideIn", YES); }
 BOOL    VGKillHalo(void)          { return VGBool(@"KillHalo", YES); }
 BOOL    VGReplaceSkin(void)       { return VGBool(@"ReplaceSkin", YES); }
+BOOL    VGHideGlass(void)         { return VGBool(@"HideGlass", NO); }
+BOOL    VGMarkFrames(void)        { return VGBool(@"MarkFrames", NO); }
 
 CGFloat VGRadius(void) {
     double r = VGDouble(@"Radius", 26.0);

@@ -204,7 +204,7 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
 @property (nonatomic, assign) CGSize lastHaloSize;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *bgSnapshots;  // 被清掉底色/边框的层
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *skinSnapshots; // 被关掉的原生底板（可能有多个）
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *layerSnapshots; // 被关掉的 backdrop 图层
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *markSnapshots;  // 排查用的彩色描边
 @property (nonatomic, assign) BOOL skinHidden;
 @end
 
@@ -280,38 +280,30 @@ static BOOL VGLooksLikeSkin(UIView *v) {
     return NO;
 }
 
-// 尺寸是不是"同一块底板"：系统的材质层经常和宿主差 1pt
-static BOOL VGSameFootprint(CGSize a, CGSize b) {
-    if (a.width <= 0.5 || a.height <= 0.5) return NO;
-    return fabs(a.width - b.width) <= 6.0 && fabs(a.height - b.height) <= 6.0;
-}
-
 static NSArray<UIView *> *VGFindNativeSkins(UIView *host) {
     NSMutableArray<UIView *> *out = [NSMutableArray array];
     if (!host) return out;
     CGSize hs = host.bounds.size;
 
-    // 1) 兄弟层：**不看类名，只看尺寸**
-    //    真机诊断（0.2.5）拿到的结构是：
-    //        MTMaterialView 7x134 / UIView 7x134 / MTMaterialView 7x134
-    //    两个 MTMaterialView 已被关掉，但中间那个**普通 UIView** 也是底板，
-    //    它的类名匹配不到任何关键字，于是活到了最后 —— 收缩状态那圈框就是它。
-    //    所以这一层改成"凡和我一样大的兄弟都不是我的人"，一律关掉。
+    // 兄弟层：按类名找材质底板，**全部**收进来。
+    // 真机结构里同时存在 MTMaterialView / UIView / MTMaterialView 三个平级兄弟，
+    // 只关第一个的话另外两个的材质边还会露出来。
+    // 注意别再扩大范围去关"所有同尺寸兄弟"——那个普通 UIView 实测没有子图层，
+    // 它不画东西；一刀切会把音量条的填充一起弄没（0.2.6 的教训）。
     UIView *super = host.superview;
     if (super) {
         for (UIView *sib in super.subviews) {
             if (sib == host || sib.hidden) continue;
+            if (!VGLooksLikeSkin(sib)) continue;
             CGSize s = sib.bounds.size;
             if (s.width <= 0.5 || s.height <= 0.5) continue;
-            BOOL same = VGSameFootprint(s, hs);
-            BOOL bigSkin = VGLooksLikeSkin(sib) &&
-                           (s.width + 1 >= hs.width && s.height + 1 >= hs.height);
-            if (same || bigSkin) [out addObject:sib];
+            if (s.width + 1 < hs.width || s.height + 1 < hs.height) continue;
+            [out addObject:sib];
         }
     }
     if (out.count) return out;
 
-    // 2) 内部层（兄弟层一个都没找到时才兜底，避免误伤滑块本体）
+    // 内部层
     for (UIView *sub in host.subviews) {
         if (!VGLooksLikeSkin(sub)) continue;
         CGSize s = sub.bounds.size;
@@ -319,39 +311,8 @@ static NSArray<UIView *> *VGFindNativeSkins(UIView *host) {
         [out addObject:sub];
     }
 
-    // 3) 祖先不处理：宿主是它的后代，alpha=0 会把整个 HUD 弄没
+    // 祖先不处理：宿主是它的后代，alpha=0 会把整个 HUD 弄没
     return out;
-}
-
-// 有的底板不是视图，而是直接挂在祖先图层上的 CABackdropLayer。
-// 把宿主大小一致的祖先（-1 / -2）里的 backdrop 图层透明度也归零。
-static void VGStripBackdropLayers(UIView *v, VGDecorState *st) {
-    if (!v || !st) return;
-    if (!st.layerSnapshots) st.layerSnapshots = [NSMutableArray array];
-
-    NSMutableArray<CALayer *> *stack = [NSMutableArray array];
-    for (CALayer *l in v.layer.sublayers) [stack addObject:l];
-
-    NSUInteger guard = 0;
-    while (stack.count && guard++ < 40) {
-        CALayer *l = stack.firstObject;
-        [stack removeObjectAtIndex:0];
-        NSString *cn = NSStringFromClass([l class]);
-        if ([cn hasPrefix:@"VG"]) continue;   // 别把自己的 VGGlassBackdrop 关掉
-        BOOL target = [cn containsString:@"Backdrop"] || [cn containsString:@"Material"];
-        if (target && !l.hidden) {
-            BOOL known = NO;
-            for (NSDictionary *d in st.layerSnapshots) {
-                if (d[@"l"] == l) { known = YES; break; }
-            }
-            if (!known) [st.layerSnapshots addObject:@{ @"l": l, @"o": @(l.opacity) }];
-            if (l.opacity > 0.001) {
-                l.opacity = 0;
-                VGLog(@"layer off: %@", cn);
-            }
-        }
-        for (CALayer *s in l.sublayers) [stack addObject:s];
-    }
 }
 
 static void VGApplySkinReplace(UIView *host, VGDecorState *st) {
@@ -364,23 +325,11 @@ static void VGApplySkinReplace(UIView *host, VGDecorState *st) {
             if (v) v.alpha = [d[@"a"] doubleValue];
         }
         [st.skinSnapshots removeAllObjects];
-        for (NSDictionary *d in st.layerSnapshots) {
-            CALayer *l = d[@"l"];
-            if (l) l.opacity = [d[@"o"] floatValue];
-        }
-        [st.layerSnapshots removeAllObjects];
         st.skinHidden = NO;
         return;
     }
 
     if (!st.skinSnapshots) st.skinSnapshots = [NSMutableArray array];
-
-    // 祖先里和宿主同尺寸的那两层，图层上可能直接挂着 backdrop，先扫一遍
-    CGSize hs = host.bounds.size;
-    UIView *a1 = host.superview;
-    if (a1 && VGSameFootprint(a1.bounds.size, hs)) VGStripBackdropLayers(a1, st);
-    UIView *a2 = a1.superview;
-    if (a2 && VGSameFootprint(a2.bounds.size, hs)) VGStripBackdropLayers(a2, st);
 
     NSArray<UIView *> *skins = VGFindNativeSkins(host);
     if (!skins.count) return;
@@ -676,6 +625,15 @@ void VGTeardownHUDView(UIView *host) {
     }
     [st.bgSnapshots removeAllObjects];
 
+    for (NSDictionary *d in st.markSnapshots) {
+        UIView *v = d[@"v"];
+        if (!v) continue;
+        v.layer.borderWidth = [d[@"bw"] doubleValue];
+        id bc = d[@"bc"];
+        v.layer.borderColor = [bc isKindOfClass:[UIColor class]] ? ((UIColor *)bc).CGColor : NULL;
+    }
+    [st.markSnapshots removeAllObjects];
+
     host.layer.cornerRadius = st.origRadius;
     host.layer.masksToBounds = st.origMasks;
 
@@ -743,6 +701,72 @@ static void VGPlaySlideIn(UIView *host) {
     fade.toValue = @1.0;
     fade.duration = 0.20;
     [layer addAnimation:fade forKey:@"vg.fadeIn"];
+}
+
+// 排查用：给每一层可疑容器描上不同的颜色。
+// 用户截图后，看到哪种颜色的框，就知道那个框是哪一层的 border 画的，
+// 不用再靠"猜类名 + 改代码 + 重新装包"来试。
+static void VGApplyMarks(UIView *host, VGDecorState *st) {
+    if (!st || !host) return;
+    if (!st.markSnapshots) st.markSnapshots = [NSMutableArray array];
+
+    if (!VGMarkFrames()) {
+        for (NSDictionary *d in st.markSnapshots) {
+            UIView *v = d[@"v"];
+            if (!v) continue;
+            v.layer.borderWidth = [d[@"bw"] doubleValue];
+            id bc = d[@"bc"];
+            v.layer.borderColor = [bc isKindOfClass:[UIColor class]] ? ((UIColor *)bc).CGColor : NULL;
+        }
+        [st.markSnapshots removeAllObjects];
+        return;
+    }
+
+    static NSArray<UIColor *> *palette;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        palette = @[[UIColor redColor], [UIColor greenColor], [UIColor blueColor],
+                    [UIColor yellowColor], [UIColor magentaColor], [UIColor cyanColor],
+                    [UIColor orangeColor], [UIColor whiteColor]];
+        // NSStringFromClass 之外的顺序说明写在设置面板的页脚里
+    });
+
+    NSMutableArray<UIView *> *targets = [NSMutableArray array];
+    UIView *anc = host.superview;
+    for (int i = 0; i < 4 && anc; i++, anc = anc.superview) [targets addObject:anc];
+
+    CGSize hs = host.bounds.size;
+    UIView *sup = host.superview;
+    if (sup) {
+        for (UIView *sib in sup.subviews) {
+            if (sib == host) continue;
+            CGSize s = sib.bounds.size;
+            if (s.width + 1 < hs.width || s.height + 1 < hs.height) continue;
+            [targets addObject:sib];
+        }
+    }
+    [targets addObject:host];   // 最后一个是宿主本身（白色）
+
+    NSUInteger idx = 0;
+    for (UIView *v in targets) {
+        BOOL known = NO;
+        for (NSDictionary *d in st.markSnapshots) {
+            if (d[@"v"] == v) { known = YES; break; }
+        }
+        if (!known) {
+            UIColor *bc = v.layer.borderColor ? [UIColor colorWithCGColor:v.layer.borderColor] : nil;
+            [st.markSnapshots addObject:@{
+                @"v"  : v,
+                @"bw" : @(v.layer.borderWidth),
+                @"bc" : bc ?: (id)[NSNull null]
+            }];
+        }
+        UIColor *c = palette[idx % palette.count];
+        v.layer.borderColor = c.CGColor;
+        v.layer.borderWidth = 1.5;
+        VGLog(@"mark %lu %@", (unsigned long)idx, NSStringFromClass([v class]));
+        idx++;
+    }
 }
 
 void VGDecorateHUDView(UIView *host) {
@@ -833,18 +857,26 @@ void VGDecorateHUDView(UIView *host) {
     // 再把祖先链上那些"方框底色"清掉（胶囊外圈那层更大的浅色框）
     VGClearAncestorBackgrounds(host, st);
 
-    // 底板没了就没人提供"存在感"，这里给玻璃托个底：
-    // 底色至少 0.16，并且补一层模糊，否则整个 HUD 会透得看不见。
+    // 底板没了就没人提供"存在感"，这里给玻璃托个底。
+    // 但**不再强开模糊**——那样"额外模糊"开关等于失效，画面会一片发白。
     CGFloat tint = VGTintAlpha();
     BOOL blur = VGExtraBlur();
-    if (st.skinHidden) {
-        tint = MAX(tint, 0.16);
-        blur = YES;
-    }
+    if (st.skinHidden && tint < 0.10) tint = 0.10;
 
     [st.backdrop applyRadius:radius tint:tint blur:blur];
     st.rim.hidden = !VGRimEnabled();
     [st.rim applyRadius:radius];
+
+    // 排查用：只看系统原样，不叠我们的玻璃
+    if (VGHideGlass()) {
+        st.backdrop.hidden = YES;
+        st.rim.hidden = YES;
+    } else {
+        st.backdrop.hidden = NO;
+    }
+
+    // 排查用：给每一层可疑的容器描上不同颜色，一眼看出那个"框"是谁画的
+    VGApplyMarks(host, st);
 
     // 最后再处理外圈：要放在宿主圆角设好之后，不然算出来的 pad 是旧的
     if (VGKillHalo()) {
