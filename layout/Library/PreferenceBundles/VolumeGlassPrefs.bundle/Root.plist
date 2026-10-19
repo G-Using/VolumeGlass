@@ -287,9 +287,9 @@
 			<key>defaults</key>
 			<string>com.shiyi.volumeglass</string>
 			<key>default</key>
-			<true/>
+			<false/>
 			<key>label</key>
-			<string>收缩时填充满底色（消掉细边/尖角）</string>
+			<string>收缩时填充满底色（描边去不掉时再开）</string>
 			<key>PostNotification</key>
 			<string>com.shiyi.volumeglass-changed</string>
 		</dict>

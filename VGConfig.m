@@ -42,7 +42,7 @@ BOOL    VGReplaceSkin(void)       { return VGBool(@"ReplaceSkin", YES); }
 BOOL    VGHideGlass(void)         { return VGBool(@"HideGlass", NO); }
 BOOL    VGMarkFrames(void)        { return VGBool(@"MarkFrames", NO); }
 BOOL    VGDeepClean(void)         { return VGBool(@"DeepClean", NO); }
-BOOL    VGFillNarrow(void)        { return VGBool(@"FillNarrow", YES); }
+BOOL    VGFillNarrow(void)        { return VGBool(@"FillNarrow", NO); }
 
 CGFloat VGRadius(void) {
     double r = VGDouble(@"Radius", 26.0);
