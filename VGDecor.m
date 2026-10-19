@@ -251,7 +251,7 @@ static NSDictionary *VGSnapshotView(UIView *v) {
     return @{
         @"v"  : v,
         @"r"  : @(l.cornerRadius),
-        @"cc" : @(l.cornerCurve),
+        @"cc" : (l.cornerCurve ?: @""),
         @"m"  : @(l.masksToBounds),
         @"so" : @(l.shadowOpacity),
         @"sr" : @(l.shadowRadius),
@@ -267,7 +267,9 @@ static void VGRestoreView(NSDictionary *d) {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     l.cornerRadius  = [d[@"r"] doubleValue];
-    l.cornerCurve   = (CACornerCurve)[d[@"cc"] integerValue];
+    // 16.x SDK 里 cornerCurve 就是 NSString*（CALayerCornerCurve），不是枚举
+    NSString *cc = d[@"cc"];
+    if (cc.length) l.cornerCurve = cc;
     l.masksToBounds = [d[@"m"] boolValue];
     l.shadowOpacity = [d[@"so"] floatValue];
     l.shadowRadius  = [d[@"sr"] doubleValue];
