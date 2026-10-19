@@ -349,12 +349,45 @@ static void VGApplySkinReplace(UIView *host, VGDecorState *st) {
 // 胶囊外面套着的那圈更大的方框，往往不是独立视图，而是某一层的 backgroundColor。
 // 清 backgroundColor 不影响它的子视图，比 alpha=0 安全得多——
 // alpha=0 会把整个子树（包括我们自己的宿主和填充条）一起弄没。
+// 系统给音量条加的那圈 1px 细边是 layer.borderWidth，不是背景色。
+// 收缩状态下整条只有 8pt 宽，1px 边框会占满整个边缘，看着就是一个"框"。
+static void VGStripChrome(UIView *v, VGDecorState *st) {
+    if (!v || !st) return;
+    UIColor *bg = v.backgroundColor;
+    BOOL hasBg = (bg != nil && CGColorGetAlpha(bg.CGColor) >= 0.01);
+    CGFloat bw = v.layer.borderWidth;
+    if (!hasBg && bw <= 0.01) return;
+
+    // 系统可能在每次布局里把边框重设回来，快照只存第一次的原值
+    BOOL known = NO;
+    for (NSDictionary *d in st.bgSnapshots) {
+        if (d[@"v"] == v) { known = YES; break; }
+    }
+    if (!known) {
+        [st.bgSnapshots addObject:@{
+            @"v"  : v,
+            @"bg" : hasBg ? (id)bg : (id)[NSNull null],
+            @"bw" : @(bw)
+        }];
+    }
+    if (hasBg) v.backgroundColor = [UIColor clearColor];
+    v.layer.borderWidth = 0;
+    VGLog(@"strip chrome: %@ bg=%d bw=%.1f", NSStringFromClass([v class]), (int)hasBg, bw);
+}
+
 static void VGClearAncestorBackgrounds(UIView *host, VGDecorState *st) {
     if (!st) return;
     if (!st.bgSnapshots) st.bgSnapshots = [NSMutableArray array];
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
+
+    VGStripChrome(host, st);
+
+    for (UIView *sub in host.subviews) {
+        if (sub == st.backdrop || sub == st.rim) continue;
+        VGStripChrome(sub, st);
+    }
 
     UIView *anc = host.superview;
     for (NSUInteger i = 0; i < 4 && anc; i++, anc = anc.superview) {
@@ -365,13 +398,7 @@ static void VGClearAncestorBackgrounds(UIView *host, VGDecorState *st) {
         CGRect hf = [host convertRect:host.bounds toView:anc];
         if (!CGRectContainsRect(CGRectInset(anc.bounds, -1, -1), hf)) continue;
 
-        UIColor *bg = anc.backgroundColor;
-        if (!bg) continue;
-        if (CGColorGetAlpha(bg.CGColor) < 0.01) continue;
-
-        [st.bgSnapshots addObject:@{ @"v": anc, @"bg": bg }];
-        anc.backgroundColor = [UIColor clearColor];
-        VGLog(@"clear bg: %@", NSStringFromClass([anc class]));
+        VGStripChrome(anc, st);
     }
 
     [CATransaction commit];
@@ -384,12 +411,26 @@ static NSString *VGDiagLine(UIView *v, NSString *tag) {
     NSString *bgs = @"nil";
     if (bg) bgs = (CGColorGetAlpha(bg.CGColor) < 0.01) ? @"clear" : @"BG";
     CGSize s = v.bounds.size;
-    return [NSString stringWithFormat:@"%@ %@ %.0fx%.0f %@",
-            tag, NSStringFromClass([v class]), s.width, s.height, bgs];
+    // bw 就是那圈细边框：sw 是这层的子层里有几层带描边
+    NSUInteger strokes = 0;
+    for (CALayer *l in v.layer.sublayers) {
+        if ([l isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)l).lineWidth > 0.01) strokes++;
+    }
+    return [NSString stringWithFormat:@"%@ %@ %.0fx%.0f %@ bw=%.1f st=%lu",
+            tag, NSStringFromClass([v class]), s.width, s.height, bgs,
+            v.layer.borderWidth, (unsigned long)strokes];
 }
 
 static void VGSaveDiag(UIView *host) {
     if (!host) return;
+    CGSize hs = host.bounds.size;
+    if (hs.width < 1 || hs.height < 1) return;   // 还没布局，抓了也是 0
+
+    // 展开和收缩是两种尺寸，各自抓一次；最后一次（收缩）会覆盖前面的
+    static CGSize lastSize = {0, 0};
+    if (CGSizeEqualToSize(lastSize, hs)) return;
+    lastSize = hs;
+
     NSMutableArray<NSString *> *lines = [NSMutableArray array];
     [lines addObject:[NSString stringWithFormat:@"host %@ %.0fx%.0f",
                       NSStringFromClass([host class]),
@@ -541,7 +582,10 @@ void VGTeardownHUDView(UIView *host) {
 
     for (NSDictionary *d in st.bgSnapshots) {
         UIView *v = d[@"v"];
-        if (v) v.backgroundColor = d[@"bg"];
+        if (!v) continue;
+        id bg = d[@"bg"];
+        if (bg != (id)[NSNull null]) v.backgroundColor = bg;
+        v.layer.borderWidth = [d[@"bw"] doubleValue];
     }
     [st.bgSnapshots removeAllObjects];
 
@@ -633,6 +677,9 @@ void VGDecorateHUDView(UIView *host) {
     CGFloat radius = VGResolvedRadius(host);
     gLastHost = host;
 
+    // 抓结构要在"清边框"之前，不然记下来的都是被我们改过的值
+    VGSaveDiag(host);
+
     VGDecorState *st = objc_getAssociatedObject(host, kVGStateKey);
     if (!st && VGHasDecoratedRelative(host)) {
         VGLog(@"skip %@ (relative already decorated)", NSStringFromClass([host class]));
@@ -668,9 +715,6 @@ void VGDecorateHUDView(UIView *host) {
 
         VGLog(@"decorate host=%@ bounds=%@", NSStringFromClass([host class]),
               NSStringFromCGRect(host.bounds));
-
-        // 把结构写进设置面板，下次出问题不用猜也不用 Frida
-        VGSaveDiag(host);
 
         if (VGSlideIn()) VGPlaySlideIn(host);
     }
