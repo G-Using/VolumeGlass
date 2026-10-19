@@ -1,5 +1,9 @@
 #import <UIKit/UIKit.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // 给 HUD 容器套上"圆角 + 玻璃"
 void VGDecorateHUDView(UIView *host);
 
@@ -8,3 +12,7 @@ void VGRefreshDecor(void);
 
 // 关掉后还原原样
 void VGTeardownHUDView(UIView *host);
+
+#ifdef __cplusplus
+}
+#endif

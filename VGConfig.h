@@ -1,6 +1,10 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern NSString *const VGDomain;          // com.shiyi.volumeglass
 extern NSString *const VGChangedNotification;
 
@@ -20,3 +24,7 @@ NSInteger VGLevelUp(void);                // 从 HUD 根视图向上找几层，
 NSString *VGClassOverride(void);
 
 void    VGLog(NSString *fmt, ...) NS_FORMAT_FUNCTION(1, 2);
+
+#ifdef __cplusplus
+}
+#endif
