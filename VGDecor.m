@@ -141,11 +141,11 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
         _gradient.startPoint = CGPointMake(0.5, 0.5);
         _gradient.endPoint = CGPointMake(0.5, 0.0);
         _gradient.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.30].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.24].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.03].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.10].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.02].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.30].CGColor
+            (id)[UIColor colorWithWhite:1.0 alpha:0.24].CGColor
         ];
         _gradient.locations = @[@0.0, @0.22, @0.50, @0.78, @1.0];
 
@@ -164,12 +164,22 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
     _lastRadius = radius;
     _lastSize = self.bounds.size;
 
+    CGFloat minSide = MIN(self.bounds.size.width, self.bounds.size.height);
+    if (minSide <= 0) return;
+
+    // 收缩状态下整条可能只有 8pt 宽，固定 1pt 的环会占掉 12%，
+    // 看起来就是"外面套了一圈灰边"。环宽按短边缩（0.5~1.0），越细越淡。
+    CGFloat w = MIN(MAX(minSide * 0.045, 0.5), 1.0);
+    CGFloat fade = MAX(MIN(1.0, minSide / 28.0), 0.12);
+
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     self.layer.cornerRadius = radius;
     _gradient.frame = self.bounds;
+    _gradient.opacity = (float)fade;
     _ring.frame = self.bounds;
-    _ring.path = VGRingPath(CGRectInset(self.bounds, 0.5, 0.5), MAX(radius - 0.5, 0.5), 1.0).CGPath;
+    _ring.path = VGRingPath(CGRectInset(self.bounds, w * 0.5, w * 0.5),
+                            MAX(radius - w * 0.5, 0.5), w).CGPath;
     [CATransaction commit];
 }
 
