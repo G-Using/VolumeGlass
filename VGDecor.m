@@ -202,9 +202,8 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *haloSnapshots;
 @property (nonatomic, assign) CGFloat lastHaloRadius;
 @property (nonatomic, assign) CGSize lastHaloSize;
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *bgSnapshots;  // 被清掉底色的祖先
-@property (nonatomic, weak) UIView *nativeSkin;      // 系统自带的那层方形底板
-@property (nonatomic, assign) CGFloat origSkinAlpha; // 它原来的透明度
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *bgSnapshots;  // 被清掉底色/边框的层
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *skinSnapshots; // 被关掉的原生底板（可能有多个）
 @property (nonatomic, assign) BOOL skinHidden;
 @end
 
@@ -280,11 +279,14 @@ static BOOL VGLooksLikeSkin(UIView *v) {
     return NO;
 }
 
-static UIView *VGFindNativeSkin(UIView *host) {
-    if (!host) return nil;
+static NSArray<UIView *> *VGFindNativeSkins(UIView *host) {
+    NSMutableArray<UIView *> *out = [NSMutableArray array];
+    if (!host) return out;
     CGSize hs = host.bounds.size;
 
-    // 1) 兄弟层：最常见。底板和滑块平级、比滑块大、压在滑块下面。
+    // 1) 兄弟层：实测音量 HUD 里会有**两个** MTMaterialView 跟宿主平级
+    //    （真机抓到的结构：MTMaterialView / UIView / MTMaterialView），
+    //    只关一个的话另一个的材质边就露在外面，看着还是一圈框。
     UIView *super = host.superview;
     if (super) {
         for (UIView *sib in super.subviews) {
@@ -292,56 +294,64 @@ static UIView *VGFindNativeSkin(UIView *host) {
             if (!VGLooksLikeSkin(sib)) continue;
             CGSize s = sib.bounds.size;
             if (s.width <= 0 || s.height <= 0) continue;
-            // 底板至少要把宿主包住，太小的不是它
             if (s.width + 1 < hs.width || s.height + 1 < hs.height) continue;
-            return sib;
+            [out addObject:sib];
         }
     }
+    if (out.count) return out;
 
-    // 2) 内部层：有的版本底板是宿主自己的第一个子视图
+    // 2) 内部层
     for (UIView *sub in host.subviews) {
         if (!VGLooksLikeSkin(sub)) continue;
         CGSize s = sub.bounds.size;
         if (s.width <= 0 || s.height <= 0) continue;
-        return sub;
+        [out addObject:sub];
     }
 
-    // 3) 祖先不处理：宿主是它的后代，设 alpha=0 会把整个 HUD 弄没。
-    //    那种情况交给下面的"圆角裁切"（VGApplyHaloFix）去处理。
-    return nil;
+    // 3) 祖先不处理：宿主是它的后代，alpha=0 会把整个 HUD 弄没
+    return out;
 }
 
 static void VGApplySkinReplace(UIView *host, VGDecorState *st) {
     if (!st) return;
 
+    // 关掉开关时把之前隐藏的原生底板全部还原
     if (!VGReplaceSkin()) {
-        if (st.nativeSkin && st.skinHidden) {
-            st.nativeSkin.alpha = st.origSkinAlpha;
-            st.skinHidden = NO;
+        for (NSDictionary *d in st.skinSnapshots) {
+            UIView *v = d[@"v"];
+            if (v) v.alpha = [d[@"a"] doubleValue];
         }
+        [st.skinSnapshots removeAllObjects];
+        st.skinHidden = NO;
         return;
     }
 
-    // weak 失效说明底板被系统重建了，重新找一遍
-    if (!st.nativeSkin) {
-        UIView *skin = VGFindNativeSkin(host);
-        if (!skin || skin == host) return;
-        if ([host isDescendantOfView:skin]) return;   // 安全的兜底
-        st.nativeSkin = skin;
-        st.origSkinAlpha = st.skinHidden ? 1.0 : skin.alpha;
-    }
+    if (!st.skinSnapshots) st.skinSnapshots = [NSMutableArray array];
 
-    UIView *skin = st.nativeSkin;
-    if (!skin || skin == host) return;
-    if (st.skinHidden && fabs(skin.alpha) < 0.001) return;
+    NSArray<UIView *> *skins = VGFindNativeSkins(host);
+    if (!skins.count) return;
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    skin.alpha = 0.0;
-    [CATransaction commit];
-    st.skinHidden = YES;
+    for (UIView *v in skins) {
+        if (v == host) continue;
+        if ([host isDescendantOfView:v]) continue;   // 安全兜底
 
-    VGLog(@"skin replaced: %@", NSStringFromClass([skin class]));
+        BOOL known = NO;
+        for (NSDictionary *d in st.skinSnapshots) {
+            if (d[@"v"] == v) { known = YES; break; }
+        }
+        if (!known) {
+            [st.skinSnapshots addObject:@{ @"v": v, @"a": @(v.alpha) }];
+        }
+        if (fabs(v.alpha) > 0.001) {
+            v.alpha = 0.0;
+            VGLog(@"skin hidden: %@", NSStringFromClass([v class]));
+        }
+    }
+    [CATransaction commit];
+
+    st.skinHidden = YES;
 }
 
 #pragma mark - 清掉祖先的底色（那个"框"真正的来源）
@@ -416,9 +426,9 @@ static NSString *VGDiagLine(UIView *v, NSString *tag) {
     for (CALayer *l in v.layer.sublayers) {
         if ([l isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)l).lineWidth > 0.01) strokes++;
     }
-    return [NSString stringWithFormat:@"%@ %@ %.0fx%.0f %@ bw=%.1f st=%lu",
+    return [NSString stringWithFormat:@"%@ %@ %.0fx%.0f %@ b%.1f s%lu a%.2f",
             tag, NSStringFromClass([v class]), s.width, s.height, bgs,
-            v.layer.borderWidth, (unsigned long)strokes];
+            v.layer.borderWidth, (unsigned long)strokes, v.alpha];
 }
 
 static void VGSaveDiag(UIView *host) {
@@ -576,8 +586,11 @@ void VGTeardownHUDView(UIView *host) {
     [st.haloSnapshots removeAllObjects];
     st.lastHaloRadius = 0;
 
-    if (st.nativeSkin && st.skinHidden) st.nativeSkin.alpha = st.origSkinAlpha;
-    st.nativeSkin = nil;
+    for (NSDictionary *d in st.skinSnapshots) {
+        UIView *v = d[@"v"];
+        if (v) v.alpha = [d[@"a"] doubleValue];
+    }
+    [st.skinSnapshots removeAllObjects];
     st.skinHidden = NO;
 
     for (NSDictionary *d in st.bgSnapshots) {

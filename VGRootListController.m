@@ -14,7 +14,7 @@
         NSArray *lines = [ud objectForKey:@"Diag"];
         if ([lines isKindOfClass:[NSArray class]] && lines.count) {
             PSSpecifier *g = [PSSpecifier groupSpecifierWithName:@"HUD Structure (last volume press)"];
-            [g setProperty:@"host = target   . = child   s = sibling   ^ = ancestor   BG = layer with opaque background (that is the frame)"
+            [g setProperty:@"host=target  .=child  s=sibling  ^=ancestor  BG=opaque bg  b=borderWidth  s=strokes  a=alpha"
                     forKey:@"footerText"];
             [arr addObject:g];
             for (NSString *ln in lines) {
