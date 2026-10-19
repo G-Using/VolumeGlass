@@ -13,8 +13,8 @@
         NSUserDefaults *ud = [[NSUserDefaults alloc] initWithSuiteName:@"com.shiyi.volumeglass"];
         NSArray *lines = [ud objectForKey:@"Diag"];
         if ([lines isKindOfClass:[NSArray class]] && lines.count) {
-            PSSpecifier *g = [PSSpecifier groupSpecifierWithName:@"HUD 结构（上次弹出音量时抓的）"];
-            [g setProperty:@"host=宿主   .=子层  s=兄弟  ^-1..=祖先。BG 表示这层有不透明底色，就是那个框。"
+            PSSpecifier *g = [PSSpecifier groupSpecifierWithName:@"HUD Structure (last volume press)"];
+            [g setProperty:@"host = target   . = child   s = sibling   ^ = ancestor   BG = layer with opaque background (that is the frame)"
                     forKey:@"footerText"];
             [arr addObject:g];
             for (NSString *ln in lines) {
