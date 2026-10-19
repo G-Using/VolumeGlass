@@ -10,10 +10,14 @@
 
         // 把上一次弹出音量时抓到的 HUD 结构贴在这里。
         // 出问题直接截图，不用连电脑、不用 Frida。
+        // 抓两次：BEFORE 是系统原样（我们动手之前），AFTER 是改完之后。
         NSUserDefaults *ud = [[NSUserDefaults alloc] initWithSuiteName:@"com.shiyi.volumeglass"];
-        NSArray *lines = [ud objectForKey:@"Diag"];
-        if ([lines isKindOfClass:[NSArray class]] && lines.count) {
-            PSSpecifier *g = [PSSpecifier groupSpecifierWithName:@"HUD Structure (last volume press)"];
+        NSArray *pairs = @[ @[@"Diag",      @"BEFORE (system original)"],
+                            @[@"DiagAfter", @"AFTER (after our tweak)"] ];
+        for (NSArray *pair in pairs) {
+            NSArray *lines = [ud objectForKey:pair[0]];
+            if (![lines isKindOfClass:[NSArray class]] || !lines.count) continue;
+            PSSpecifier *g = [PSSpecifier groupSpecifierWithName:pair[1]];
             [g setProperty:@"host=target  .=child  s=sibling  ^=ancestor  BG=opaque bg  b=borderWidth  a=alpha  [sublayers]"
                     forKey:@"footerText"];
             [arr addObject:g];

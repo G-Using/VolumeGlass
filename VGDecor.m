@@ -583,15 +583,17 @@ static void VGDumpTree(UIView *v, NSString *prefix, int depth,
     }
 }
 
-static void VGSaveDiag(UIView *host) {
+// 抓一份结构快照。key 不同 → 存到不同的键里，
+// 设置面板会把 BEFORE / AFTER 两段都列出来，一眼看出一项改动有没有生效。
+static void VGSaveDiagTo(UIView *host, NSString *key, CGSize *lastSize) {
     if (!host) return;
     CGSize hs = host.bounds.size;
     if (hs.width < 1 || hs.height < 1) return;   // 还没布局，抓了也是 0
 
     // 展开和收缩是两种尺寸，各自抓一次；最后一次（收缩）会覆盖前面的
-    static CGSize lastSize = {0, 0};
-    if (CGSizeEqualToSize(lastSize, hs)) return;
-    lastSize = hs;
+    if (!lastSize) return;
+    if (CGSizeEqualToSize(*lastSize, hs)) return;
+    *lastSize = hs;
 
     NSMutableArray<NSString *> *lines = [NSMutableArray array];
     [lines addObject:[NSString stringWithFormat:@"host %@ %.0fx%.0f",
@@ -619,8 +621,20 @@ static void VGSaveDiag(UIView *host) {
     }
 
     NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:VGDomain];
-    [d setObject:lines forKey:@"Diag"];
+    [d setObject:lines forKey:key];
     [d synchronize];
+}
+
+// 改动前（这是我们还没动手时的系统原值）
+static void VGSaveDiag(UIView *host) {
+    static CGSize lastSize = {0, 0};
+    VGSaveDiagTo(host, @"Diag", &lastSize);
+}
+
+// 改动后（下一轮布局时抓，此时 borderWidth / alpha 已经被我们改过）
+static void VGSaveDiagAfter(UIView *host) {
+    static CGSize lastSize = {0, 0};
+    VGSaveDiagTo(host, @"DiagAfter", &lastSize);
 }
 
 #pragma mark - 消除容器自带的外发光（真正的那圈"虚影"）
@@ -1023,10 +1037,14 @@ void VGDecorateHUDView(UIView *host) {
         VGApplyHaloFix(host, radius, st);
     } else if (st.haloSnapshots.count > 0) {
         // 关掉这个开关时要把之前清掉的阴影还原，不然它会一直"看不见"
+
         for (NSDictionary *d in st.haloSnapshots) VGRestoreView(d);
         [st.haloSnapshots removeAllObjects];
         st.lastHaloRadius = 0;
     }
+
+    // 改完之后再抓一份，和前面的 BEFORE 对照着看就知道改没改到
+    VGSaveDiagAfter(host);
 }
 
 void VGRefreshDecor(void) {
