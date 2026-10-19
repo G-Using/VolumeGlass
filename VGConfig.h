@@ -15,6 +15,7 @@ BOOL    VGApplyToBrightness(void);        // 亮度 HUD 也应用，默认 NO
 BOOL    VGDebugEnabled(void);             // 日志，默认 NO
 BOOL    VGAutoCapsule(void);              // 圆角自动取 min(宽,高)/2，默认 YES
 BOOL    VGSlideIn(void);                  // 从侧面滑入的动画，默认 YES
+BOOL    VGKillHalo(void);                 // 消掉容器自带的阴影/外发光，默认 YES
 
 CGFloat VGRadius(void);                   // 旧版绝对值圆角，默认 26，范围 0~60
 CGFloat VGCornerPercent(void);            // 圆角大小占胶囊半径的百分比，默认 100（完全胶囊）

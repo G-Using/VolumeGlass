@@ -21,6 +21,7 @@
     [d setObject:@YES     forKey:@"Rim"];
     [d setObject:@NO      forKey:@"ExtraBlur"];
     [d setObject:@YES     forKey:@"SlideIn"];
+    [d setObject:@YES     forKey:@"KillHalo"];
     [d setObject:@NO      forKey:@"Brightness"];
     [d setObject:@0       forKey:@"LevelUp"];
     [d synchronize];
@@ -41,6 +42,7 @@
         @"Brightness" : @NO,
         @"AutoCapsule": @YES,
         @"SlideIn"    : @YES,
+        @"KillHalo"   : @YES,
         @"LevelUp"    : @0,
         @"Debug"      : @NO,
     };

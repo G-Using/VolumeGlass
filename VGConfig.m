@@ -37,6 +37,7 @@ BOOL    VGApplyToBrightness(void) { return VGBool(@"Brightness", NO); }
 BOOL    VGDebugEnabled(void)      { return VGBool(@"Debug", NO); }
 BOOL    VGAutoCapsule(void)       { return VGBool(@"AutoCapsule", YES); }
 BOOL    VGSlideIn(void)           { return VGBool(@"SlideIn", YES); }
+BOOL    VGKillHalo(void)          { return VGBool(@"KillHalo", YES); }
 
 CGFloat VGRadius(void) {
     double r = VGDouble(@"Radius", 26.0);

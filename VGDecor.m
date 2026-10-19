@@ -75,6 +75,20 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
 
     _highlight.frame = CGRectMake(0, 0, self.bounds.size.width, self.bounds.size.height * 0.55);
 
+    // 高光跟着底色联动：底色拖到 0 就是完全干净的一层，
+    // 否则单看"底色=0 还有虚影"会误判成别的原因。
+    if (tintAlpha <= 0.001) {
+        _highlight.hidden = YES;
+    } else {
+        _highlight.hidden = NO;
+        CGFloat hi = MIN(tintAlpha * 1.6, 0.14);
+        _highlight.colors = @[
+            (id)[UIColor colorWithWhite:1.0 alpha:hi].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:hi * 0.3].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.0].CGColor
+        ];
+    }
+
     [CATransaction commit];
 
     if (blur) {
@@ -175,6 +189,8 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
 @property (nonatomic, strong) VGRimView *rim;
 @property (nonatomic, assign) CGFloat origRadius;
 @property (nonatomic, assign) BOOL origMasks;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *haloSnapshots;
+@property (nonatomic, assign) CGFloat lastHaloRadius;
 @end
 
 @implementation VGDecorState
@@ -224,6 +240,101 @@ static BOOL VGIsBackgroundLike(UIView *v) {
     return NO;
 }
 
+#pragma mark - 消除容器自带的外发光（真正的那圈"虚影"）
+
+// 系统 HUD 容器自己带一层阴影/外发光，外面那层皮还是原来那个胶囊形状。
+// 我们把里面那层的圆角改小之后，外面这层原胶囊的弧线就会从缝里露出来一圈，
+// 看着就是"边缘虚影"。这里把外层一起圆成同样的形状并裁掉，阴影一并清掉。
+
+static NSDictionary *VGSnapshotView(UIView *v) {
+    CALayer *l = v.layer;
+    return @{
+        @"v"  : v,
+        @"r"  : @(l.cornerRadius),
+        @"cc" : @(l.cornerCurve),
+        @"m"  : @(l.masksToBounds),
+        @"so" : @(l.shadowOpacity),
+        @"sr" : @(l.shadowRadius),
+        @"ow" : @(l.shadowOffset.width),
+        @"oh" : @(l.shadowOffset.height),
+    };
+}
+
+static void VGRestoreView(NSDictionary *d) {
+    UIView *v = d[@"v"];
+    if (!v) return;
+    CALayer *l = v.layer;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    l.cornerRadius  = [d[@"r"] doubleValue];
+    l.cornerCurve   = (CACornerCurve)[d[@"cc"] integerValue];
+    l.masksToBounds = [d[@"m"] boolValue];
+    l.shadowOpacity = [d[@"so"] floatValue];
+    l.shadowRadius  = [d[@"sr"] doubleValue];
+    l.shadowOffset  = CGSizeMake([d[@"ow"] doubleValue], [d[@"oh"] doubleValue]);
+    l.shadowPath    = nil;
+    [CATransaction commit];
+}
+
+// host 在 anc 里四周剩下的最小空隙；负数说明 host 伸出了 anc
+static CGFloat VGPadAroundHost(UIView *host, UIView *anc) {
+    CGRect r = [host convertRect:host.bounds toView:anc];
+    CGRect b = anc.bounds;
+    if (b.size.width <= 0 || b.size.height <= 0) return -1;
+    CGFloat l  = CGRectGetMinX(r) - CGRectGetMinX(b);
+    CGFloat rr = CGRectGetMaxX(b) - CGRectGetMaxX(r);
+    CGFloat t  = CGRectGetMinY(r) - CGRectGetMinY(b);
+    CGFloat bb = CGRectGetMaxY(b) - CGRectGetMaxY(r);
+    return MIN(MIN(l, rr), MIN(t, bb));
+}
+
+static void VGApplyHaloFix(UIView *host, CGFloat radius, VGDecorState *st) {
+    if (!st) return;
+    // 布局回调是高频的，参数没变就别每次都拆了重建
+    if (st.haloSnapshots.count > 0 && fabs(st.lastHaloRadius - radius) < 0.5) return;
+    st.lastHaloRadius = radius;
+
+    if (!st.haloSnapshots) {
+        st.haloSnapshots = [NSMutableArray array];
+    } else {
+        for (NSDictionary *d in st.haloSnapshots) VGRestoreView(d);
+        [st.haloSnapshots removeAllObjects];
+    }
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+
+    // 宿主自身：圆角之外不该再有任何阴影
+    [st.haloSnapshots addObject:VGSnapshotView(host)];
+    host.layer.shadowOpacity = 0;
+    host.layer.shadowRadius  = 0;
+    host.layer.shadowPath    = nil;
+
+    // 往上最多三层：只处理比宿主大 0~26pt 的容器，那才是 HUD 自己的皮。
+    // 再大就是窗口级视图了，裁它会连同别的东西一起切掉。
+    UIView *anc = host.superview;
+    for (NSUInteger i = 0; i < 3 && anc; i++, anc = anc.superview) {
+        CGSize s = anc.bounds.size;
+        if (s.width <= 0 || s.height <= 0) continue;
+        if (s.width > 480 || s.height > 480) break;
+
+        CGFloat pad = VGPadAroundHost(host, anc);
+        if (pad < -1.0 || pad > 26.0) continue;
+
+        [st.haloSnapshots addObject:VGSnapshotView(anc)];
+        anc.layer.cornerRadius  = radius + MAX(pad, 0);
+        anc.layer.cornerCurve   = kCACornerCurveContinuous;
+        anc.layer.masksToBounds = YES;
+        anc.layer.shadowOpacity = 0;
+        anc.layer.shadowRadius  = 0;
+
+        VGLog(@"消虚影：%@ pad=%.1f -> r=%.1f",
+              NSStringFromClass([anc class]), pad, radius + MAX(pad, 0));
+    }
+
+    [CATransaction commit];
+}
+
 void VGTeardownHUDView(UIView *host) {
     if (!host) return;
     VGDecorState *st = objc_getAssociatedObject(host, kVGStateKey);
@@ -231,6 +342,10 @@ void VGTeardownHUDView(UIView *host) {
 
     [st.backdrop removeFromSuperview];
     [st.rim removeFromSuperview];
+
+    for (NSDictionary *d in st.haloSnapshots) VGRestoreView(d);
+    [st.haloSnapshots removeAllObjects];
+    st.lastHaloRadius = 0;
 
     host.layer.cornerRadius = st.origRadius;
     host.layer.masksToBounds = st.origMasks;
@@ -383,6 +498,16 @@ void VGDecorateHUDView(UIView *host) {
     [st.backdrop applyRadius:radius tint:VGTintAlpha() blur:VGExtraBlur()];
     st.rim.hidden = !VGRimEnabled();
     [st.rim applyRadius:radius];
+
+    // 最后再处理外圈：要放在宿主圆角设好之后，不然算出来的 pad 是旧的
+    if (VGKillHalo()) {
+        VGApplyHaloFix(host, radius, st);
+    } else if (st.haloSnapshots.count > 0) {
+        // 关掉这个开关时要把之前清掉的阴影还原，不然它会一直"看不见"
+        for (NSDictionary *d in st.haloSnapshots) VGRestoreView(d);
+        [st.haloSnapshots removeAllObjects];
+        st.lastHaloRadius = 0;
+    }
 }
 
 void VGRefreshDecor(void) {
