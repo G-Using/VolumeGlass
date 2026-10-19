@@ -204,6 +204,7 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
 @property (nonatomic, assign) CGSize lastHaloSize;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *bgSnapshots;  // 被清掉底色/边框的层
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *skinSnapshots; // 被关掉的原生底板（可能有多个）
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *layerSnapshots; // 被关掉的 backdrop 图层
 @property (nonatomic, assign) BOOL skinHidden;
 @end
 
@@ -279,37 +280,78 @@ static BOOL VGLooksLikeSkin(UIView *v) {
     return NO;
 }
 
+// 尺寸是不是"同一块底板"：系统的材质层经常和宿主差 1pt
+static BOOL VGSameFootprint(CGSize a, CGSize b) {
+    if (a.width <= 0.5 || a.height <= 0.5) return NO;
+    return fabs(a.width - b.width) <= 6.0 && fabs(a.height - b.height) <= 6.0;
+}
+
 static NSArray<UIView *> *VGFindNativeSkins(UIView *host) {
     NSMutableArray<UIView *> *out = [NSMutableArray array];
     if (!host) return out;
     CGSize hs = host.bounds.size;
 
-    // 1) 兄弟层：实测音量 HUD 里会有**两个** MTMaterialView 跟宿主平级
-    //    （真机抓到的结构：MTMaterialView / UIView / MTMaterialView），
-    //    只关一个的话另一个的材质边就露在外面，看着还是一圈框。
+    // 1) 兄弟层：**不看类名，只看尺寸**
+    //    真机诊断（0.2.5）拿到的结构是：
+    //        MTMaterialView 7x134 / UIView 7x134 / MTMaterialView 7x134
+    //    两个 MTMaterialView 已被关掉，但中间那个**普通 UIView** 也是底板，
+    //    它的类名匹配不到任何关键字，于是活到了最后 —— 收缩状态那圈框就是它。
+    //    所以这一层改成"凡和我一样大的兄弟都不是我的人"，一律关掉。
     UIView *super = host.superview;
     if (super) {
         for (UIView *sib in super.subviews) {
             if (sib == host || sib.hidden) continue;
-            if (!VGLooksLikeSkin(sib)) continue;
             CGSize s = sib.bounds.size;
-            if (s.width <= 0 || s.height <= 0) continue;
-            if (s.width + 1 < hs.width || s.height + 1 < hs.height) continue;
-            [out addObject:sib];
+            if (s.width <= 0.5 || s.height <= 0.5) continue;
+            BOOL same = VGSameFootprint(s, hs);
+            BOOL bigSkin = VGLooksLikeSkin(sib) &&
+                           (s.width + 1 >= hs.width && s.height + 1 >= hs.height);
+            if (same || bigSkin) [out addObject:sib];
         }
     }
     if (out.count) return out;
 
-    // 2) 内部层
+    // 2) 内部层（兄弟层一个都没找到时才兜底，避免误伤滑块本体）
     for (UIView *sub in host.subviews) {
         if (!VGLooksLikeSkin(sub)) continue;
         CGSize s = sub.bounds.size;
-        if (s.width <= 0 || s.height <= 0) continue;
+        if (s.width <= 0.5 || s.height <= 0.5) continue;
         [out addObject:sub];
     }
 
     // 3) 祖先不处理：宿主是它的后代，alpha=0 会把整个 HUD 弄没
     return out;
+}
+
+// 有的底板不是视图，而是直接挂在祖先图层上的 CABackdropLayer。
+// 把宿主大小一致的祖先（-1 / -2）里的 backdrop 图层透明度也归零。
+static void VGStripBackdropLayers(UIView *v, VGDecorState *st) {
+    if (!v || !st) return;
+    if (!st.layerSnapshots) st.layerSnapshots = [NSMutableArray array];
+
+    NSMutableArray<CALayer *> *stack = [NSMutableArray array];
+    for (CALayer *l in v.layer.sublayers) [stack addObject:l];
+
+    NSUInteger guard = 0;
+    while (stack.count && guard++ < 40) {
+        CALayer *l = stack.firstObject;
+        [stack removeObjectAtIndex:0];
+        NSString *cn = NSStringFromClass([l class]);
+        if ([cn hasPrefix:@"VG"]) continue;   // 别把自己的 VGGlassBackdrop 关掉
+        BOOL target = [cn containsString:@"Backdrop"] || [cn containsString:@"Material"];
+        if (target && !l.hidden) {
+            BOOL known = NO;
+            for (NSDictionary *d in st.layerSnapshots) {
+                if (d[@"l"] == l) { known = YES; break; }
+            }
+            if (!known) [st.layerSnapshots addObject:@{ @"l": l, @"o": @(l.opacity) }];
+            if (l.opacity > 0.001) {
+                l.opacity = 0;
+                VGLog(@"layer off: %@", cn);
+            }
+        }
+        for (CALayer *s in l.sublayers) [stack addObject:s];
+    }
 }
 
 static void VGApplySkinReplace(UIView *host, VGDecorState *st) {
@@ -322,11 +364,23 @@ static void VGApplySkinReplace(UIView *host, VGDecorState *st) {
             if (v) v.alpha = [d[@"a"] doubleValue];
         }
         [st.skinSnapshots removeAllObjects];
+        for (NSDictionary *d in st.layerSnapshots) {
+            CALayer *l = d[@"l"];
+            if (l) l.opacity = [d[@"o"] floatValue];
+        }
+        [st.layerSnapshots removeAllObjects];
         st.skinHidden = NO;
         return;
     }
 
     if (!st.skinSnapshots) st.skinSnapshots = [NSMutableArray array];
+
+    // 祖先里和宿主同尺寸的那两层，图层上可能直接挂着 backdrop，先扫一遍
+    CGSize hs = host.bounds.size;
+    UIView *a1 = host.superview;
+    if (a1 && VGSameFootprint(a1.bounds.size, hs)) VGStripBackdropLayers(a1, st);
+    UIView *a2 = a1.superview;
+    if (a2 && VGSameFootprint(a2.bounds.size, hs)) VGStripBackdropLayers(a2, st);
 
     NSArray<UIView *> *skins = VGFindNativeSkins(host);
     if (!skins.count) return;
@@ -416,19 +470,38 @@ static void VGClearAncestorBackgrounds(UIView *host, VGDecorState *st) {
 
 #pragma mark - 结构诊断（写进设置面板，用户直接截图）
 
+// 把这一层的子图层类名列出来 —— 牌子是 UIView 不代表它没在画东西，
+// 真正的"框"经常是挂在它图层上的 CABackdropLayer / CABackdropLayer 子类。
+static NSString *VGLayerBrief(UIView *v) {
+    NSArray<CALayer *> *subs = v.layer.sublayers;
+    if (!subs.count) return @"-";
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    NSUInteger i = 0;
+    for (CALayer *l in subs) {
+        if (i++ >= 3) { [names addObject:@".."]; break; }
+        [names addObject:NSStringFromClass([l class])];
+    }
+    return [names componentsJoinedByString:@","];
+}
+
 static NSString *VGDiagLine(UIView *v, NSString *tag) {
     UIColor *bg = v.backgroundColor;
     NSString *bgs = @"nil";
     if (bg) bgs = (CGColorGetAlpha(bg.CGColor) < 0.01) ? @"clear" : @"BG";
     CGSize s = v.bounds.size;
-    // bw 就是那圈细边框：sw 是这层的子层里有几层带描边
-    NSUInteger strokes = 0;
-    for (CALayer *l in v.layer.sublayers) {
-        if ([l isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)l).lineWidth > 0.01) strokes++;
-    }
-    return [NSString stringWithFormat:@"%@ %@ %.0fx%.0f %@ b%.1f s%lu a%.2f",
+    return [NSString stringWithFormat:@"%@%@ %.0fx%.0f %@ b%.1f a%.2f [%@]",
             tag, NSStringFromClass([v class]), s.width, s.height, bgs,
-            v.layer.borderWidth, (unsigned long)strokes, v.alpha];
+            v.layer.borderWidth, v.alpha, VGLayerBrief(v)];
+}
+
+static void VGDumpTree(UIView *v, NSString *prefix, int depth,
+                       NSMutableArray<NSString *> *lines, NSUInteger budget) {
+    if (depth <= 0) return;
+    for (UIView *s in v.subviews) {
+        if (lines.count >= budget) return;
+        [lines addObject:VGDiagLine(s, prefix)];
+        VGDumpTree(s, [prefix stringByAppendingString:@"."], depth - 1, lines, budget);
+    }
 }
 
 static void VGSaveDiag(UIView *host) {
@@ -446,22 +519,23 @@ static void VGSaveDiag(UIView *host) {
                       NSStringFromClass([host class]),
                       host.bounds.size.width, host.bounds.size.height]];
 
-    NSUInteger n = 0;
-    for (UIView *s in host.subviews) {
-        if (n++ >= 6) break;
-        [lines addObject:VGDiagLine(s, @" .")];
-    }
-    n = 0;
+    // 1) 宿主子树，往下 3 层
+    VGDumpTree(host, @" .", 3, lines, 20);
+
+    // 2) 兄弟 + 兄弟的子树（底板常常藏在兄弟的子层里）
     UIView *sup = host.superview;
     if (sup) {
         for (UIView *s in sup.subviews) {
             if (s == host) continue;
-            if (n++ >= 6) break;
+            if (lines.count >= 34) break;
             [lines addObject:VGDiagLine(s, @" s")];
+            VGDumpTree(s, @"  s.", 2, lines, 44);
         }
     }
+
+    // 3) 祖先
     UIView *anc = sup;
-    for (int i = 0; i < 5 && anc; i++, anc = anc.superview) {
+    for (int i = 0; i < 4 && anc; i++, anc = anc.superview) {
         [lines addObject:VGDiagLine(anc, [NSString stringWithFormat:@"^%d", -(i + 1)])];
     }
 
