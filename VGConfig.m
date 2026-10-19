@@ -41,6 +41,7 @@ BOOL    VGKillHalo(void)          { return VGBool(@"KillHalo", YES); }
 BOOL    VGReplaceSkin(void)       { return VGBool(@"ReplaceSkin", YES); }
 BOOL    VGHideGlass(void)         { return VGBool(@"HideGlass", NO); }
 BOOL    VGMarkFrames(void)        { return VGBool(@"MarkFrames", NO); }
+BOOL    VGDeepClean(void)         { return VGBool(@"DeepClean", NO); }
 
 CGFloat VGRadius(void) {
     double r = VGDouble(@"Radius", 26.0);

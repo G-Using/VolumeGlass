@@ -23,6 +23,26 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
 - (void)applyRadius:(CGFloat)radius tint:(CGFloat)tintAlpha blur:(BOOL)blur;
 @end
 
+// 圆角必须分两种曲率：
+//   半径 = 短边一半  → 胶囊，只能用 circular。用 continuous 时四个角的弧会在
+//                      边的中线上互相挤压，形成一个**尖点**（收缩态 7pt 宽时
+//                      整条直接变成针尖形的透镜，边缘还会出现一条亮线）。
+//   半径 < 短边一半  → 圆角矩形，continuous 才是 iOS 那种顺滑的曲率。
+// 另外半径绝不能 ≥ 短边一半，否则必然出尖角，这里统一夹一下。
+static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
+    if (!l) return;
+    CGFloat half = MIN(size.width, size.height) * 0.5;
+    BOOL capsule = NO;
+    if (half > 0.5 && radius >= half - 0.75) {
+        capsule = YES;
+        radius = MAX(half - 0.5, 0.5);
+    }
+    if (radius < 0) radius = 0;
+    l.cornerRadius = radius;
+    l.cornerCurve = capsule ? @"circular" : @"continuous";
+    l.masksToBounds = YES;
+}
+
 @implementation VGGlassBackdrop {
     CALayer *_tint;
     CAGradientLayer *_highlight;
@@ -63,15 +83,11 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
 
-    self.layer.cornerRadius = radius;
-    self.layer.cornerCurve = kCACornerCurveContinuous;
-    self.layer.masksToBounds = YES;
+    VGSetCorner(self.layer, radius, self.bounds.size);
 
     _tint.backgroundColor = [UIColor colorWithWhite:1.0 alpha:tintAlpha].CGColor;
     _tint.frame = self.bounds;
-    _tint.cornerRadius = radius;
-    _tint.cornerCurve = kCACornerCurveContinuous;
-    _tint.masksToBounds = YES;
+    VGSetCorner(_tint, radius, self.bounds.size);
 
     _highlight.frame = CGRectMake(0, 0, self.bounds.size.width, self.bounds.size.height * 0.55);
 
@@ -97,9 +113,7 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
         }
         _blur.hidden = NO;
         _blur.frame = self.bounds;
-        _blur.layer.cornerRadius = radius;
-        _blur.layer.cornerCurve = kCACornerCurveContinuous;
-        _blur.layer.masksToBounds = YES;
+        VGSetCorner(_blur.layer, radius, self.bounds.size);
     } else {
         _blur.hidden = YES;
     }
@@ -334,8 +348,10 @@ static NSArray<UIView *> *VGFindNativeSkins(UIView *host) {
         }
     }
 
-    // 2) 内部层：**不再因为找到兄弟就提前返回**，两个方向都要扫。
-    VGCollectSkinsInside(host, hs, out, 3);
+    // 2) 内部层：默认**不扫**。深处那个 MTMaterialView 是音量条的"槽"，
+    //    把它关掉之后白色填充条失去对比，音量大小就看不见了（0.2.8 的教训）。
+    //    只有打开「深度清理底板」才连它一起关。
+    if (VGDeepClean()) VGCollectSkinsInside(host, hs, out, 3);
 
     // 3) 祖先不处理：宿主是它的后代，alpha=0 会把整个 HUD 弄没
     return out;
@@ -610,9 +626,7 @@ static void VGApplyHaloFix(UIView *host, CGFloat radius, VGDecorState *st) {
         if (pad < -1.0 || pad > 46.0) continue;
 
         [st.haloSnapshots addObject:VGSnapshotView(anc)];
-        anc.layer.cornerRadius  = radius + MAX(pad, 0);
-        anc.layer.cornerCurve   = kCACornerCurveContinuous;
-        anc.layer.masksToBounds = YES;
+        VGSetCorner(anc.layer, radius + MAX(pad, 0), anc.bounds.size);
         anc.layer.shadowOpacity = 0;
         anc.layer.shadowRadius  = 0;
 
@@ -702,12 +716,15 @@ static CGFloat VGResolvedRadius(UIView *host) {
     if (half <= 0) return VGRadius();
 
     // 旧版兼容：关掉自动胶囊且填了绝对点数，就用绝对点数
-    if (!VGAutoCapsule() && VGRadius() > 0.5) return MIN(VGRadius(), half);
+    if (!VGAutoCapsule() && VGRadius() > 0.5) return MIN(VGRadius(), half - 0.5);
 
     CGFloat pct = VGCornerPercent();
     if (pct < 6) pct = 6;
     if (pct > 100) pct = 100;
-    return half * (pct / 100.0);
+    // 关键：半径永远比"短边一半"小 0.5pt。
+    // 等于一半时 four 个角的弧会挤成一个尖点（收缩态就是一根针），
+    // 这条限制是那个"尖尖的/边框"问题的正面解法。
+    return MIN(half * (pct / 100.0), MAX(half - 0.5, 0.5));
 }
 
 // 从侧面滑入：只加 CAAnimation，不改 model 值，不会把 HUD 留在错误位置
@@ -859,9 +876,7 @@ void VGDecorateHUDView(UIView *host) {
     [st.backdrop setFrame:host.bounds];
     [st.rim setFrame:host.bounds];
 
-    host.layer.cornerRadius = radius;
-    host.layer.cornerCurve = kCACornerCurveContinuous;
-    host.layer.masksToBounds = YES;
+    VGSetCorner(host.layer, radius, host.bounds.size);
 
     // 材质/模糊层也得跟着圆，否则四角会露出直角
     for (UIView *sub in host.subviews) {
@@ -872,9 +887,7 @@ void VGDecorateHUDView(UIView *host) {
                                      @[@(sub.layer.cornerRadius), @(sub.layer.masksToBounds)],
                                      OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
-        sub.layer.cornerRadius = radius;
-        sub.layer.cornerCurve = kCACornerCurveContinuous;
-        sub.layer.masksToBounds = YES;
+        VGSetCorner(sub.layer, radius, sub.bounds.size);
     }
 
     // 关键一步：先把系统那层方形底板换掉。

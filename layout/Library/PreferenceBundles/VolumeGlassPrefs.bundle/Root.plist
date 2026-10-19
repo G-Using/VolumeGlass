@@ -8,7 +8,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>音量玻璃 0.2.8</string>
+			<string>音量玻璃 0.2.9</string>
 			<key>footerText</key>
 			<string>只作用于系统音量 HUD（按音量键弹出的那个窗口）。改完按一下音量键即可看到效果，不需要注销。</string>
 		</dict>
@@ -262,6 +262,20 @@
 			<false/>
 			<key>label</key>
 			<string>标记可疑层（彩色描边）</string>
+			<key>PostNotification</key>
+			<string>com.shiyi.volumeglass-changed</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>key</key>
+			<string>DeepClean</string>
+			<key>defaults</key>
+			<string>com.shiyi.volumeglass</string>
+			<key>default</key>
+			<false/>
+			<key>label</key>
+			<string>深度清理底板（会牺牲音量填充对比）</string>
 			<key>PostNotification</key>
 			<string>com.shiyi.volumeglass-changed</string>
 		</dict>
