@@ -16,7 +16,8 @@ BOOL    VGDebugEnabled(void);             // 日志，默认 NO
 BOOL    VGAutoCapsule(void);              // 圆角自动取 min(宽,高)/2，默认 YES
 BOOL    VGSlideIn(void);                  // 从侧面滑入的动画，默认 YES
 
-CGFloat VGRadius(void);                   // 圆角，默认 26，范围 0~60
+CGFloat VGRadius(void);                   // 旧版绝对值圆角，默认 26，范围 0~60
+CGFloat VGCornerPercent(void);            // 圆角大小占胶囊半径的百分比，默认 100（完全胶囊）
 CGFloat VGTintAlpha(void);                // 玻璃底色不透明度，默认 0.12，0~0.6
 NSInteger VGLevelUp(void);                // 从 HUD 根视图向上找几层，默认 1，0~4
 

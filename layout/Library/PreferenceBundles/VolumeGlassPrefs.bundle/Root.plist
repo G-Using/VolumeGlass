@@ -8,7 +8,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>音量玻璃 0.1.1</string>
+			<string>音量玻璃 0.1.2</string>
 			<key>footerText</key>
 			<string>只作用于系统音量 HUD（按音量键弹出的那个窗口）。改完按一下音量键即可看到效果，不需要注销。</string>
 		</dict>
@@ -33,39 +33,25 @@
 			<key>label</key>
 			<string>外观</string>
 			<key>footerText</key>
-			<string>音量 HUD 现在是贴屏幕左边缘的竖胶囊，"自动胶囊"会按短边一半算圆角；关掉它才用下面的手动数值。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>key</key>
-			<string>AutoCapsule</string>
-			<key>defaults</key>
-			<string>com.shiyi.volumeglass</string>
-			<key>default</key>
-			<true/>
-			<key>label</key>
-			<string>自动胶囊</string>
-			<key>PostNotification</key>
-			<string>com.shiyi.volumeglass-changed</string>
+			<string>圆角大小按"占胶囊半径的百分比"算：100 = 完全胶囊，60 左右是圆角矩形，20 以下接近方角。拖完按一下音量键即可看到变化。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>key</key>
-			<string>Radius</string>
+			<string>CornerPercent</string>
 			<key>defaults</key>
 			<string>com.shiyi.volumeglass</string>
 			<key>default</key>
-			<real>26</real>
+			<real>100</real>
 			<key>min</key>
 			<real>0</real>
 			<key>max</key>
-			<real>60</real>
+			<real>100</real>
 			<key>showValue</key>
 			<true/>
 			<key>label</key>
-			<string>圆角</string>
+			<string>圆角大小</string>
 			<key>PostNotification</key>
 			<string>com.shiyi.volumeglass-changed</string>
 		</dict>
@@ -77,7 +63,7 @@
 			<key>defaults</key>
 			<string>com.shiyi.volumeglass</string>
 			<key>default</key>
-			<real>0.12</real>
+			<real>0.06</real>
 			<key>min</key>
 			<real>0</real>
 			<key>max</key>

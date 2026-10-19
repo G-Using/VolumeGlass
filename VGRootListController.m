@@ -15,10 +15,11 @@
     NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"com.shiyi.volumeglass"];
     [d setObject:@YES     forKey:@"Enabled"];
     [d setObject:@YES     forKey:@"AutoCapsule"];
-    [d setObject:@30      forKey:@"Radius"];
+    [d setObject:@100     forKey:@"CornerPercent"];
+    [d setObject:@26      forKey:@"Radius"];
     [d setObject:@0.06    forKey:@"Tint"];
     [d setObject:@YES     forKey:@"Rim"];
-    [d setObject:@YES     forKey:@"ExtraBlur"];
+    [d setObject:@NO      forKey:@"ExtraBlur"];
     [d setObject:@YES     forKey:@"SlideIn"];
     [d setObject:@NO      forKey:@"Brightness"];
     [d setObject:@0       forKey:@"LevelUp"];
@@ -32,8 +33,9 @@
     NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"com.shiyi.volumeglass"];
     NSDictionary *defs = @{
         @"Enabled"    : @YES,
+        @"CornerPercent": @100,
         @"Radius"     : @26,
-        @"Tint"       : @0.12,
+        @"Tint"       : @0.06,
         @"Rim"        : @YES,
         @"ExtraBlur"  : @NO,
         @"Brightness" : @NO,

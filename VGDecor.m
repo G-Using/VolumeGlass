@@ -33,9 +33,11 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
     if ((self = [super initWithFrame:frame])) {
         self.userInteractionEnabled = NO;
         self.backgroundColor = [UIColor clearColor];
+        self.clipsToBounds = YES;      // 防止高光/模糊溢出边界形成"虚影"
 
         _blur = [[UIVisualEffectView alloc] initWithEffect:nil];
         _blur.userInteractionEnabled = NO;
+        _blur.clipsToBounds = YES;
         _blur.hidden = YES;
         [self addSubview:_blur];
 
@@ -45,11 +47,11 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
 
         _highlight = [CAGradientLayer layer];
         _highlight.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.22].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.06].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.00].CGColor
         ];
-        _highlight.locations = @[@0.0, @0.18, @0.55];
+        _highlight.locations = @[@0.0, @0.25, @0.70];
         _highlight.startPoint = CGPointMake(0.5, 0.0);
         _highlight.endPoint = CGPointMake(0.5, 1.0);
         [self.layer addSublayer:_highlight];
@@ -125,11 +127,11 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
         _gradient.startPoint = CGPointMake(0.5, 0.5);
         _gradient.endPoint = CGPointMake(0.5, 0.0);
         _gradient.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.62].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.05].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.38].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.62].CGColor
+            (id)[UIColor colorWithWhite:1.0 alpha:0.30].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.03].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.02].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.30].CGColor
         ];
         _gradient.locations = @[@0.0, @0.22, @0.50, @0.78, @1.0];
 
@@ -264,13 +266,20 @@ static BOOL VGStyleActive(void) {
     return VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5);
 }
 
-// 竖条音量条（截图里贴左边缘那个胶囊）：圆角直接取短边一半
+// 圆角按"占胶囊半径的百分比"算：100 = 完全胶囊，越小越接近方角。
+// 用百分比而不是绝对点数，是因为 HUD 尺寸随机身/横竖屏变化，绝对点数会算飞。
 static CGFloat VGResolvedRadius(UIView *host) {
     CGSize s = host.bounds.size;
-    if (VGAutoCapsule() && MIN(s.width, s.height) > 0) {
-        return MIN(s.width, s.height) * 0.5;
-    }
-    return VGRadius();
+    CGFloat half = MIN(s.width, s.height) * 0.5;
+    if (half <= 0) return VGRadius();
+
+    // 旧版兼容：关掉自动胶囊且填了绝对点数，就用绝对点数
+    if (!VGAutoCapsule() && VGRadius() > 0.5) return MIN(VGRadius(), half);
+
+    CGFloat pct = VGCornerPercent();
+    if (pct < 6) pct = 6;
+    if (pct > 100) pct = 100;
+    return half * (pct / 100.0);
 }
 
 // 从侧面滑入：只加 CAAnimation，不改 model 值，不会把 HUD 留在错误位置
@@ -325,7 +334,13 @@ void VGDecorateHUDView(UIView *host) {
 
         VGGlassBackdrop *back = [[VGGlassBackdrop alloc] initWithFrame:host.bounds];
         back.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [host addSubview:back];   // 放在内容之上：玻璃本来就在内容上面，alpha 很低不会糊字
+        // 夹在"背景材质之上、内容(图标/数字)之下"：既透出玻璃，又不挡音量显示
+        NSUInteger insertAt = 0;
+        for (NSUInteger i = 0; i < host.subviews.count; i++) {
+            if (VGIsBackgroundLike(host.subviews[i])) insertAt = i + 1;
+            else break;
+        }
+        [host insertSubview:back atIndex:insertAt];
 
         VGRimView *rim = [[VGRimView alloc] initWithFrame:host.bounds];
         rim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;

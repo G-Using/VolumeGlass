@@ -45,8 +45,15 @@ CGFloat VGRadius(void) {
     return (CGFloat)r;
 }
 
+CGFloat VGCornerPercent(void) {
+    double p = VGDouble(@"CornerPercent", 100.0);
+    if (p < 0) p = 0;
+    if (p > 100) p = 100;
+    return (CGFloat)p;
+}
+
 CGFloat VGTintAlpha(void) {
-    double a = VGDouble(@"Tint", 0.12);
+    double a = VGDouble(@"Tint", 0.06);
     if (a < 0) a = 0;
     if (a > 0.6) a = 0.6;
     return (CGFloat)a;
