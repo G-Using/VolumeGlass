@@ -18,7 +18,7 @@ static IMP VGOriginal(id self, SEL sel) {
     while (c) {
         NSString *key = [NSString stringWithFormat:@"%@|%@", NSStringFromClass(c), selName];
         NSValue *v = gOriginals[key];
-        if (v) return v.pointerValue;
+        if (v) return (IMP)v.pointerValue;
         c = class_getSuperclass(c);
     }
     return NULL;
@@ -35,7 +35,7 @@ static void VGInstall(Class cls, SEL sel, IMP replacement) {
     MSHookMessageEx(cls, sel, replacement, &orig);
     if (orig) {
         NSString *key = [NSString stringWithFormat:@"%@|%@", NSStringFromClass(cls), NSStringFromSelector(sel)];
-        gOriginals[key] = [NSValue valueWithPointer:orig];
+        gOriginals[key] = [NSValue valueWithPointer:(void *)orig];
         VGLog(@"已挂 %@ %@", NSStringFromClass(cls), NSStringFromSelector(sel));
     }
 }
