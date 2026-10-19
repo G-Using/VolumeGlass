@@ -22,6 +22,7 @@
     [d setObject:@NO      forKey:@"ExtraBlur"];
     [d setObject:@YES     forKey:@"SlideIn"];
     [d setObject:@YES     forKey:@"KillHalo"];
+    [d setObject:@YES     forKey:@"ReplaceSkin"];
     [d setObject:@NO      forKey:@"Brightness"];
     [d setObject:@0       forKey:@"LevelUp"];
     [d synchronize];
@@ -43,6 +44,7 @@
         @"AutoCapsule": @YES,
         @"SlideIn"    : @YES,
         @"KillHalo"   : @YES,
+        @"ReplaceSkin": @YES,
         @"LevelUp"    : @0,
         @"Debug"      : @NO,
     };

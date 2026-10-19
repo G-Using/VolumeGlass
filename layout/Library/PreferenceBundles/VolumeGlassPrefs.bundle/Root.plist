@@ -8,7 +8,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>音量玻璃 0.1.4</string>
+			<string>音量玻璃 0.2.0</string>
 			<key>footerText</key>
 			<string>只作用于系统音量 HUD（按音量键弹出的那个窗口）。改完按一下音量键即可看到效果，不需要注销。</string>
 		</dict>
@@ -33,7 +33,8 @@
 			<key>label</key>
 			<string>外观</string>
 			<key>footerText</key>
-			<string>圆角大小=占胶囊半径的百分比（100 全胶囊，60 圆角矩形）；玻璃描边=最外圈的折射高光；额外模糊=玻璃下再垫一层磨砂；侧面滑入=弹出时从左滑入。</string>
+			<string>圆角大小=占胶囊半径的百分比（100 全胶囊，60 圆角矩形）；玻璃描边=最外圈的折射高光；额外模糊=玻璃下再垫一层磨砂；侧面滑入=弹出时从左滑入。
+替换原生底板=关掉系统那层方形底板（圆角外面露方角就靠它）；消除边缘虚影=清掉容器的阴影和外发光。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -130,6 +131,21 @@
 			<true/>
 			<key>label</key>
 			<string>消除边缘虚影</string>
+			<key>PostNotification</key>
+			<string>com.shiyi.volumeglass-changed</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>key</key>
+			<string>ReplaceSkin</string>
+			<key>defaults</key>
+			<string>com.shiyi.volumeglass</string>
+			<key>default</key>
+			<true/>
+			<key>label</key>
+			<string>替换原生底板</string>
 			<key>PostNotification</key>
 			<string>com.shiyi.volumeglass-changed</string>
 		</dict>

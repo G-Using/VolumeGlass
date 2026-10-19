@@ -183,5 +183,5 @@ __attribute__((constructor)) static void VGInit(void) {
                                     (__bridge CFStringRef)VGChangedNotification,
                                     NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    VGLog(@"VolumeGlass 0.1.4 loaded");
+    VGLog(@"VolumeGlass 0.2.0 loaded");
 }

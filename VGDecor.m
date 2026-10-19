@@ -191,6 +191,9 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
 @property (nonatomic, assign) BOOL origMasks;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *haloSnapshots;
 @property (nonatomic, assign) CGFloat lastHaloRadius;
+@property (nonatomic, weak) UIView *nativeSkin;      // 系统自带的那层方形底板
+@property (nonatomic, assign) CGFloat origSkinAlpha; // 它原来的透明度
+@property (nonatomic, assign) BOOL skinHidden;
 @end
 
 @implementation VGDecorState
@@ -238,6 +241,95 @@ static BOOL VGIsBackgroundLike(UIView *v) {
         if ([NSStringFromClass([l class]) containsString:@"Backdrop"]) return YES;
     }
     return NO;
+}
+
+#pragma mark - 替换原生底板（方底 -> 我们的圆角玻璃）
+
+// 系统音量 HUD 的背板是一块**方形**材质（MTMaterialView 那一类）。
+// 我们在它上面画圆角玻璃，圆角外面就露出方形的四个角 —— 这就是那圈"虚影"。
+// 正确做法不是把玻璃画得更厚，而是把这层原生底板关掉，
+// 让我们的圆角玻璃成为唯一的背板。
+//
+// 注意：底板通常和滑块**平级**（同一个 superview，在滑块下面），
+// 不是祖先。祖先不能设 alpha=0，那会把整个 HUD 一起弄没。
+
+static BOOL VGLooksLikeSkin(UIView *v) {
+    NSString *cn = NSStringFromClass([v class]);
+    if (!cn.length) return NO;
+    static NSArray<NSString *> *needles;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        needles = @[@"MTMaterial", @"Platter", @"Backdrop", @"VisualEffect",
+                    @"EffectView", @"MaterialView"];
+    });
+    for (NSString *n in needles) {
+        if ([cn containsString:n]) return YES;
+    }
+    return NO;
+}
+
+static UIView *VGFindNativeSkin(UIView *host) {
+    if (!host) return nil;
+    CGSize hs = host.bounds.size;
+
+    // 1) 兄弟层：最常见。底板和滑块平级、比滑块大、压在滑块下面。
+    UIView *super = host.superview;
+    if (super) {
+        for (UIView *sib in super.subviews) {
+            if (sib == host || sib.hidden) continue;
+            if (!VGLooksLikeSkin(sib)) continue;
+            CGSize s = sib.bounds.size;
+            if (s.width <= 0 || s.height <= 0) continue;
+            // 底板至少要把宿主包住，太小的不是它
+            if (s.width + 1 < hs.width || s.height + 1 < hs.height) continue;
+            return sib;
+        }
+    }
+
+    // 2) 内部层：有的版本底板是宿主自己的第一个子视图
+    for (UIView *sub in host.subviews) {
+        if (!VGLooksLikeSkin(sub)) continue;
+        CGSize s = sub.bounds.size;
+        if (s.width <= 0 || s.height <= 0) continue;
+        return sub;
+    }
+
+    // 3) 祖先不处理：宿主是它的后代，设 alpha=0 会把整个 HUD 弄没。
+    //    那种情况交给下面的"圆角裁切"（VGApplyHaloFix）去处理。
+    return nil;
+}
+
+static void VGApplySkinReplace(UIView *host, VGDecorState *st) {
+    if (!st) return;
+
+    if (!VGReplaceSkin()) {
+        if (st.nativeSkin && st.skinHidden) {
+            st.nativeSkin.alpha = st.origSkinAlpha;
+            st.skinHidden = NO;
+        }
+        return;
+    }
+
+    // weak 失效说明底板被系统重建了，重新找一遍
+    if (!st.nativeSkin) {
+        UIView *skin = VGFindNativeSkin(host);
+        if (!skin || skin == host) return;
+        if ([host isDescendantOfView:skin]) return;   // 安全的兜底
+        st.nativeSkin = skin;
+        st.origSkinAlpha = st.skinHidden ? 1.0 : skin.alpha;
+    }
+
+    UIView *skin = st.nativeSkin;
+    if (!skin || skin == host) return;
+    if (st.skinHidden && fabs(skin.alpha) < 0.001) return;
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    skin.alpha = 0.0;
+    [CATransaction commit];
+    st.skinHidden = YES;
+
+    VGLog(@"skin replaced: %@", NSStringFromClass([skin class]));
 }
 
 #pragma mark - 消除容器自带的外发光（真正的那圈"虚影"）
@@ -318,10 +410,11 @@ static void VGApplyHaloFix(UIView *host, CGFloat radius, VGDecorState *st) {
     for (NSUInteger i = 0; i < 3 && anc; i++, anc = anc.superview) {
         CGSize s = anc.bounds.size;
         if (s.width <= 0 || s.height <= 0) continue;
-        if (s.width > 480 || s.height > 480) break;
+        if (s.width > 560 || s.height > 560) break;
 
         CGFloat pad = VGPadAroundHost(host, anc);
-        if (pad < -1.0 || pad > 26.0) continue;
+        // 46pt：音量 HUD 的底板常常比滑块宽出一大截，26 会漏掉它
+        if (pad < -1.0 || pad > 46.0) continue;
 
         [st.haloSnapshots addObject:VGSnapshotView(anc)];
         anc.layer.cornerRadius  = radius + MAX(pad, 0);
@@ -348,6 +441,10 @@ void VGTeardownHUDView(UIView *host) {
     for (NSDictionary *d in st.haloSnapshots) VGRestoreView(d);
     [st.haloSnapshots removeAllObjects];
     st.lastHaloRadius = 0;
+
+    if (st.nativeSkin && st.skinHidden) st.nativeSkin.alpha = st.origSkinAlpha;
+    st.nativeSkin = nil;
+    st.skinHidden = NO;
 
     host.layer.cornerRadius = st.origRadius;
     host.layer.masksToBounds = st.origMasks;
@@ -497,7 +594,20 @@ void VGDecorateHUDView(UIView *host) {
         sub.layer.masksToBounds = YES;
     }
 
-    [st.backdrop applyRadius:radius tint:VGTintAlpha() blur:VGExtraBlur()];
+    // 关键一步：先把系统那层方形底板换掉。
+    // 不换的话，圆角外面永远露着方底的四条边——那圈"虚影"就是这么来的。
+    VGApplySkinReplace(host, st);
+
+    // 底板没了就没人提供"存在感"，这里给玻璃托个底：
+    // 底色至少 0.16，并且补一层模糊，否则整个 HUD 会透得看不见。
+    CGFloat tint = VGTintAlpha();
+    BOOL blur = VGExtraBlur();
+    if (st.skinHidden) {
+        tint = MAX(tint, 0.16);
+        blur = YES;
+    }
+
+    [st.backdrop applyRadius:radius tint:tint blur:blur];
     st.rim.hidden = !VGRimEnabled();
     [st.rim applyRadius:radius];
 
