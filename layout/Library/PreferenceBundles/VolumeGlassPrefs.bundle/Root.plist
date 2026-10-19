@@ -8,9 +8,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>音量玻璃 0.3.0</string>
+			<string>音量玻璃 0.4.0</string>
 			<key>footerText</key>
-			<string>只作用于系统音量 HUD（按音量键弹出的那个窗口）。改完按一下音量键即可看到效果，不需要注销。</string>
+			<string>不再隐藏系统底板，而是直接把它改成圆角。所以默认状态下外观和 iOS 原样完全一致，只是方角变成圆角。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -31,10 +31,9 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>外观</string>
+			<string>圆角</string>
 			<key>footerText</key>
-			<string>圆角大小=占胶囊半径的百分比（100 全胶囊，60 圆角矩形）；玻璃描边=最外圈的折射高光；额外模糊=玻璃下再垫一层磨砂；侧面滑入=弹出时从左滑入。
-替换原生底板=关掉系统那层方形底板（圆角外面露方角就靠它）；消除边缘虚影=清掉容器的阴影和外发光。</string>
+			<string>圆角大小=占短边半径的百分比：100 是完全胶囊（收缩态两端半圆），60 左右是圆角矩形。下面几项都是可选的额外效果，默认全关，保持 iOS 原样。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -56,6 +55,15 @@
 			<key>PostNotification</key>
 			<string>com.shiyi.volumeglass-changed</string>
 		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>额外效果（可选）</string>
+			<key>footerText</key>
+			<string>这几项会叠在系统材质上面，默认全关。玻璃底色调到 0 时整个自绘层不画，看到的就是纯净的原生外观。</string>
+		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSliderCell</string>
@@ -64,7 +72,7 @@
 			<key>defaults</key>
 			<string>com.shiyi.volumeglass</string>
 			<key>default</key>
-			<real>0.06</real>
+			<real>0</real>
 			<key>min</key>
 			<real>0</real>
 			<key>max</key>
@@ -72,7 +80,7 @@
 			<key>showValue</key>
 			<true/>
 			<key>label</key>
-			<string>玻璃底色</string>
+			<string>额外白色底</string>
 			<key>PostNotification</key>
 			<string>com.shiyi.volumeglass-changed</string>
 		</dict>
@@ -84,7 +92,7 @@
 			<key>defaults</key>
 			<string>com.shiyi.volumeglass</string>
 			<key>default</key>
-			<true/>
+			<false/>
 			<key>label</key>
 			<string>玻璃描边</string>
 			<key>PostNotification</key>
@@ -104,7 +112,6 @@
 			<key>PostNotification</key>
 			<string>com.shiyi.volumeglass-changed</string>
 		</dict>
-
 		<dict>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
@@ -122,19 +129,12 @@
 
 		<dict>
 			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>key</key>
-			<string>KillHalo</string>
-			<key>defaults</key>
-			<string>com.shiyi.volumeglass</string>
-			<key>default</key>
-			<true/>
+			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>消除边缘虚影</string>
-			<key>PostNotification</key>
-			<string>com.shiyi.volumeglass-changed</string>
+			<string>范围</string>
+			<key>footerText</key>
+			<string>亮度 HUD 和音量 HUD 用的是同一套视图，默认只改音量。系统底板圆角化关掉就完全回到系统原样。</string>
 		</dict>
-
 		<dict>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
@@ -145,18 +145,9 @@
 			<key>default</key>
 			<true/>
 			<key>label</key>
-			<string>替换原生底板</string>
+			<string>系统底板圆角化</string>
 			<key>PostNotification</key>
 			<string>com.shiyi.volumeglass-changed</string>
-		</dict>
-
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>范围</string>
-			<key>footerText</key>
-			<string>亮度 HUD 和音量 HUD 用的是同一套视图，默认只改音量。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -179,7 +170,7 @@
 			<key>label</key>
 			<string>高级</string>
 			<key>footerText</key>
-			<string>如果圆角套错了层（比如整块屏幕都圆了，或者根本没变化），先调"向上层数"再试；仍然不对就打开日志，把类名发我。</string>
+			<string>如果圆角套错了层（整块屏幕都圆了，或者根本没变化），先调「向上层数」；仍然不对就打开日志把类名发我。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -232,79 +223,13 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>排查</string>
-			<key>footerText</key>
-			<string>「隐藏我的玻璃」打开后只剩系统原样：如果那个框还在，说明不是玻璃画的；如果没了，就是玻璃自己的边。
-「标记可疑层」会给每层容器描上不同颜色的边，按一下音量键截图发我即可定位：红=父视图，绿=祖父，蓝=曾祖，黄=再上一层，洋红/青/橙=同尺寸兄弟层，白=音量条本体。</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>key</key>
-			<string>HideGlass</string>
-			<key>defaults</key>
-			<string>com.shiyi.volumeglass</string>
-			<key>default</key>
-			<false/>
-			<key>label</key>
-			<string>隐藏我的玻璃（看系统原样）</string>
-			<key>PostNotification</key>
-			<string>com.shiyi.volumeglass-changed</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>key</key>
-			<string>MarkFrames</string>
-			<key>defaults</key>
-			<string>com.shiyi.volumeglass</string>
-			<key>default</key>
-			<false/>
-			<key>label</key>
-			<string>标记可疑层（彩色描边）</string>
-			<key>PostNotification</key>
-			<string>com.shiyi.volumeglass-changed</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>key</key>
-			<string>DeepClean</string>
-			<key>defaults</key>
-			<string>com.shiyi.volumeglass</string>
-			<key>default</key>
-			<false/>
-			<key>label</key>
-			<string>深度清理底板（会牺牲音量填充对比）</string>
-			<key>PostNotification</key>
-			<string>com.shiyi.volumeglass-changed</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>key</key>
-			<string>FillNarrow</string>
-			<key>defaults</key>
-			<string>com.shiyi.volumeglass</string>
-			<key>default</key>
-			<false/>
-			<key>label</key>
-			<string>收缩时填充满底色（描边去不掉时再开）</string>
-			<key>PostNotification</key>
-			<string>com.shiyi.volumeglass-changed</string>
-		</dict>
-
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>label</key>
 			<string></string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>套用 iOS 26 预设（薄玻璃 + 侧面滑入）</string>
+			<string>套用预设（原生外观 + 全胶囊）</string>
 			<key>action</key>
 			<string>applyPreset26:</string>
 		</dict>

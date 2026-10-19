@@ -31,18 +31,14 @@ static double VGDouble(NSString *key, double fallback) {
 }
 
 BOOL    VGEnabled(void)           { return VGBool(@"Enabled", YES); }
-BOOL    VGRimEnabled(void)        { return VGBool(@"Rim", YES); }
+BOOL    VGRimEnabled(void)        { return VGBool(@"Rim", NO); }
 BOOL    VGExtraBlur(void)         { return VGBool(@"ExtraBlur", NO); }
 BOOL    VGApplyToBrightness(void) { return VGBool(@"Brightness", NO); }
 BOOL    VGDebugEnabled(void)      { return VGBool(@"Debug", NO); }
 BOOL    VGAutoCapsule(void)       { return VGBool(@"AutoCapsule", YES); }
 BOOL    VGSlideIn(void)           { return VGBool(@"SlideIn", YES); }
-BOOL    VGKillHalo(void)          { return VGBool(@"KillHalo", YES); }
+BOOL    VGKillHalo(void)          { return VGBool(@"KillHalo", NO); }
 BOOL    VGReplaceSkin(void)       { return VGBool(@"ReplaceSkin", YES); }
-BOOL    VGHideGlass(void)         { return VGBool(@"HideGlass", NO); }
-BOOL    VGMarkFrames(void)        { return VGBool(@"MarkFrames", NO); }
-BOOL    VGDeepClean(void)         { return VGBool(@"DeepClean", NO); }
-BOOL    VGFillNarrow(void)        { return VGBool(@"FillNarrow", NO); }
 
 CGFloat VGRadius(void) {
     double r = VGDouble(@"Radius", 26.0);
@@ -59,7 +55,7 @@ CGFloat VGCornerPercent(void) {
 }
 
 CGFloat VGTintAlpha(void) {
-    double a = VGDouble(@"Tint", 0.06);
+    double a = VGDouble(@"Tint", 0.0);
     if (a < 0) a = 0;
     if (a > 0.6) a = 0.6;
     return (CGFloat)a;

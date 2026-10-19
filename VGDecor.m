@@ -4,7 +4,27 @@
 #import <objc/runtime.h>
 #import <math.h>
 
-#pragma mark - 圆角环路径
+#pragma mark - 统一的圆角入口
+
+// 胶囊和圆角矩形的曲率不是一回事。
+// cornerRadius 正好等于短边一半时，continuous 会让四个角的弧在边的中线上互相挤压，
+// 收口处挤出一个"尖点"——收缩态只有 7pt 宽时最明显，整条会变成针尖形透镜。
+// 所以：胶囊一律 circular，continuous 只留给真正的圆角矩形。
+// 半径同时硬夹到「短边一半 - 0.5」，永远不许等于或超过一半。
+static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
+    if (!l) return;
+    CGFloat shortSide = MIN(size.width, size.height);
+    CGFloat maxR = shortSide * 0.5;
+    if (maxR <= 0.5) { l.cornerRadius = 0; return; }
+
+    CGFloat r = MIN(radius, maxR - 0.5);
+    if (r < 0) r = 0;
+    l.cornerRadius = r;
+    l.cornerCurve  = (r >= maxR - 1.0) ? @"circular" : @"continuous";
+    l.masksToBounds = YES;
+}
+
+#pragma mark - 可选：我们自己的底色层（默认关闭，开了会盖住系统材质）
 
 static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
     UIBezierPath *outer = [UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:radius];
@@ -17,31 +37,9 @@ static UIBezierPath *VGRingPath(CGRect rect, CGFloat radius, CGFloat width) {
     return outer;
 }
 
-#pragma mark - 玻璃底色（底色 + 顶部高光 + 可选额外模糊）
-
 @interface VGGlassBackdrop : UIView
 - (void)applyRadius:(CGFloat)radius tint:(CGFloat)tintAlpha blur:(BOOL)blur;
 @end
-
-// 圆角必须分两种曲率：
-//   半径 = 短边一半  → 胶囊，只能用 circular。用 continuous 时四个角的弧会在
-//                      边的中线上互相挤压，形成一个**尖点**（收缩态 7pt 宽时
-//                      整条直接变成针尖形的透镜，边缘还会出现一条亮线）。
-//   半径 < 短边一半  → 圆角矩形，continuous 才是 iOS 那种顺滑的曲率。
-// 另外半径绝不能 ≥ 短边一半，否则必然出尖角，这里统一夹一下。
-static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
-    if (!l) return;
-    CGFloat half = MIN(size.width, size.height) * 0.5;
-    BOOL capsule = NO;
-    if (half > 0.5 && radius >= half - 0.75) {
-        capsule = YES;
-        radius = MAX(half - 0.5, 0.5);
-    }
-    if (radius < 0) radius = 0;
-    l.cornerRadius = radius;
-    l.cornerCurve = capsule ? @"circular" : @"continuous";
-    l.masksToBounds = YES;
-}
 
 @implementation VGGlassBackdrop {
     CALayer *_tint;
@@ -53,7 +51,7 @@ static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
     if ((self = [super initWithFrame:frame])) {
         self.userInteractionEnabled = NO;
         self.backgroundColor = [UIColor clearColor];
-        self.clipsToBounds = YES;      // 防止高光/模糊溢出边界形成"虚影"
+        self.clipsToBounds = YES;
 
         _blur = [[UIVisualEffectView alloc] initWithEffect:nil];
         _blur.userInteractionEnabled = NO;
@@ -62,18 +60,19 @@ static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
         [self addSubview:_blur];
 
         _tint = [CALayer layer];
-        _tint.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.12].CGColor;
+        _tint.backgroundColor = [UIColor clearColor].CGColor;
         [self.layer addSublayer:_tint];
 
         _highlight = [CAGradientLayer layer];
         _highlight.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.04].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.10].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.03].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.00].CGColor
         ];
         _highlight.locations = @[@0.0, @0.25, @0.70];
         _highlight.startPoint = CGPointMake(0.5, 0.0);
         _highlight.endPoint = CGPointMake(0.5, 1.0);
+        _highlight.hidden = YES;
         [self.layer addSublayer:_highlight];
     }
     return self;
@@ -91,11 +90,12 @@ static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
 
     _highlight.frame = CGRectMake(0, 0, self.bounds.size.width, self.bounds.size.height * 0.55);
 
-    // 高光跟着底色联动：底色拖到 0 就是完全干净的一层，
-    // 否则单看"底色=0 还有虚影"会误判成别的原因。
+    // 底色为 0 就整层不画：默认就该是系统原样，不额外加白
     if (tintAlpha <= 0.001) {
         _highlight.hidden = YES;
+        self.hidden = YES;
     } else {
+        self.hidden = NO;
         _highlight.hidden = NO;
         CGFloat hi = MIN(tintAlpha * 1.6, 0.14);
         _highlight.colors = @[
@@ -131,7 +131,7 @@ static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
 
 @end
 
-#pragma mark - 描边环（锥形渐变 + 环形遮罩）
+#pragma mark - 可选：描边环
 
 @interface VGRimView : UIView
 - (void)applyRadius:(CGFloat)radius;
@@ -155,11 +155,11 @@ static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
         _gradient.startPoint = CGPointMake(0.5, 0.5);
         _gradient.endPoint = CGPointMake(0.5, 0.0);
         _gradient.colors = @[
-            (id)[UIColor colorWithWhite:1.0 alpha:0.24].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.30].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.03].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.10].CGColor,
+            (id)[UIColor colorWithWhite:1.0 alpha:0.14].CGColor,
             (id)[UIColor colorWithWhite:1.0 alpha:0.02].CGColor,
-            (id)[UIColor colorWithWhite:1.0 alpha:0.24].CGColor
+            (id)[UIColor colorWithWhite:1.0 alpha:0.30].CGColor
         ];
         _gradient.locations = @[@0.0, @0.22, @0.50, @0.78, @1.0];
 
@@ -173,22 +173,19 @@ static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
 }
 
 - (void)applyRadius:(CGFloat)radius {
-    if (_hasPath && radius == _lastRadius && CGSizeEqualToSize(_lastSize, self.bounds.size)) return;
+    if (_hasPath && fabs(radius - _lastRadius) < 0.01 &&
+        CGSizeEqualToSize(_lastSize, self.bounds.size)) return;
     _hasPath = YES;
     _lastRadius = radius;
     _lastSize = self.bounds.size;
 
+    // 环宽和透明度随短边自适应：7pt 宽的条上 1pt 环占 14%，看着就是一圈灰边
     CGFloat minSide = MIN(self.bounds.size.width, self.bounds.size.height);
-    if (minSide <= 0) return;
-
-    // 收缩状态下整条可能只有 8pt 宽，固定 1pt 的环会占掉 12%，
-    // 看起来就是"外面套了一圈灰边"。环宽按短边缩（0.5~1.0），越细越淡。
-    CGFloat w = MIN(MAX(minSide * 0.045, 0.5), 1.0);
-    CGFloat fade = MAX(MIN(1.0, minSide / 28.0), 0.12);
+    CGFloat w = MIN(MAX(minSide * 0.045, 0.4), 1.0);
+    CGFloat fade = MAX(MIN(1.0, minSide / 28.0), 0.10);
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    self.layer.cornerRadius = radius;
     _gradient.frame = self.bounds;
     _gradient.opacity = (float)fade;
     _ring.frame = self.bounds;
@@ -213,25 +210,16 @@ static void VGSetCorner(CALayer *l, CGFloat radius, CGSize size) {
 @property (nonatomic, strong) VGRimView *rim;
 @property (nonatomic, assign) CGFloat origRadius;
 @property (nonatomic, assign) BOOL origMasks;
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *haloSnapshots;
-@property (nonatomic, assign) CGFloat lastHaloRadius;
-@property (nonatomic, assign) CGSize lastHaloSize;
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *bgSnapshots;  // 被清掉底色/边框的层
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *skinSnapshots; // 被关掉的原生底板（可能有多个）
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *markSnapshots;  // 排查用的彩色描边
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *borderSnapshots; // 被清掉的 borderWidth（兄弟层/容器）
-@property (nonatomic, assign) BOOL skinHidden;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *skinSnapshots; // 被倒圆角的原生底板
+@property (nonatomic, assign) CGFloat lastRadius;
+@property (nonatomic, assign) CGSize lastSize;
 @end
 
 @implementation VGDecorState
 @end
 
 static const void *kVGStateKey = &kVGStateKey;
-static const void *kVGSubviewOrigKey = &kVGSubviewOrigKey;
 static __weak UIView *gLastHost = nil;
-
-// 前置声明：VGApplySkinReplace 里要还原描边，函数体在后面
-static void VGRestoreBorders(VGDecorState *st);
 
 static NSHashTable *VGDecoratedTable(void) {
     static NSHashTable *table;
@@ -242,7 +230,7 @@ static NSHashTable *VGDecoratedTable(void) {
     return table;
 }
 
-// 两条 hook 路径可能命中父子两层，避免叠两圈描边
+// 两条 hook 路径可能命中父子两层，避免叠两圈
 static BOOL VGHasDecoratedRelative(UIView *host) {
     NSHashTable *table = VGDecoratedTable();
     for (UIView *v = host.superview; v; v = v.superview) {
@@ -254,34 +242,21 @@ static BOOL VGHasDecoratedRelative(UIView *host) {
     return NO;
 }
 
-static BOOL VGIsBackgroundLike(UIView *v) {
-    NSString *cn = NSStringFromClass([v class]);
-    if (cn.length) {
-        static NSArray<NSString *> *needles;
-        static dispatch_once_t once;
-        dispatch_once(&once, ^{
-            needles = @[@"Material", @"VisualEffect", @"Backdrop", @"Blur",
-                        @"EffectView", @"Glass"];
-        });
-        for (NSString *n in needles) {
-            if ([cn containsString:n]) return YES;
-        }
-    }
-    for (CALayer *l in v.layer.sublayers) {
-        if ([NSStringFromClass([l class]) containsString:@"Backdrop"]) return YES;
-    }
-    return NO;
+static BOOL VGIsOurs(UIView *v) {
+    return [NSStringFromClass([v class]) hasPrefix:@"VG"];
 }
 
-#pragma mark - 替换原生底板（方底 -> 我们的圆角玻璃）
+#pragma mark - 把系统原生底板改成圆角（不隐藏、不替换）
 
-// 系统音量 HUD 的背板是一块**方形**材质（MTMaterialView 那一类）。
-// 我们在它上面画圆角玻璃，圆角外面就露出方形的四个角 —— 这就是那圈"虚影"。
-// 正确做法不是把玻璃画得更厚，而是把这层原生底板关掉，
-// 让我们的圆角玻璃成为唯一的背板。
+// 【关键决定】
+// 0.2.x 的做法是「把系统那层材质 alpha=0 关掉，自己再画一层玻璃」。
+// 结果：材质一没，收缩态 7pt 宽的那条只剩 1.5pt 描边 + 白色填充，
+// 看着就是一条带尖角的细线 —— 无论怎么调圆角都救不回来，
+// 因为**系统的材质本身就是那层"随壁纸变化的半透明底色"**，关掉它等于把底子拆了。
 //
-// 注意：底板通常和滑块**平级**（同一个 superview，在滑块下面），
-// 不是祖先。祖先不能设 alpha=0，那会把整个 HUD 一起弄没。
+// 现在的做法：**一层都不关**。保留 MTMaterialView 原生材质（它就是 iOS 原样的外观），
+// 只在它身上设 cornerRadius / masksToBounds，把方角改成圆角。
+// 于是收缩态 = 原生胶囊（两端半圆），展开态 = 原生材质 + 我们给的圆角。
 
 static BOOL VGLooksLikeSkin(UIView *v) {
     NSString *cn = NSStringFromClass([v class]);
@@ -298,15 +273,7 @@ static BOOL VGLooksLikeSkin(UIView *v) {
     return NO;
 }
 
-// 我们自己造的视图一律别碰（VGGlassBackdrop 类名里就带 "Backdrop"，
-// 不排除掉的话会被当成系统底板关掉，玻璃直接消失）。
-static BOOL VGIsOurs(UIView *v) {
-    NSString *cn = NSStringFromClass([v class]);
-    return [cn hasPrefix:@"VG"];
-}
-
-// 里面装着文字/图标的绝对不能用 alpha=0 关掉——那会把音量数字一起藏了。
-// 这类材质层只能留在原地，靠别的方式处理。
+// 里面装着文字/图标的不能用 masksToBounds 裁，否则会把数字图标切掉
 static BOOL VGCarriesContent(UIView *v) {
     for (UIView *s in v.subviews) {
         if ([s isKindOfClass:[UILabel class]] ||
@@ -317,427 +284,152 @@ static BOOL VGCarriesContent(UIView *v) {
     return NO;
 }
 
-// 递归往里找"和宿主一样大的材质层"。
-// 真机诊断看到 SBElasticVolumeSliderView 内部还有一个 MTMaterialView 7x134 a1.00，
-// 它才是那圈材质边的来源；只扫兄弟层永远扫不到它。
-static void VGCollectSkinsInside(UIView *v, CGSize hs, NSMutableArray<UIView *> *out, int depth) {
-    if (depth <= 0) return;
-    for (UIView *s in v.subviews) {
-        if (s.hidden || VGIsOurs(s)) continue;
-        CGSize sz = s.bounds.size;
-        if (sz.width + 1 >= hs.width && sz.height + 1 >= hs.height &&
-            VGLooksLikeSkin(s) && !VGCarriesContent(s)) {
-            [out addObject:s];
-        }
-        VGCollectSkinsInside(s, hs, out, depth - 1);
-    }
-}
-
-static NSArray<UIView *> *VGFindNativeSkins(UIView *host) {
+// 收集"需要倒圆角"的层：
+//   1) 和宿主平级、尺寸不小于宿主的层（真机结构里是两个 MTMaterialView
+//      再加一个纯描边的 UIView，三个都一样大）
+//   2) 宿主内部那层材质（槽），它是白的填充条的对比来源，只倒角不隐藏
+static NSArray<UIView *> *VGFindTargets(UIView *host) {
     NSMutableArray<UIView *> *out = [NSMutableArray array];
     if (!host) return out;
     CGSize hs = host.bounds.size;
 
-    // 1) 兄弟层：按类名找材质底板。真机结构里同时存在
-    //    MTMaterialView / UIView / MTMaterialView 三个平级兄弟。
-    UIView *super = host.superview;
-    if (super) {
-        for (UIView *sib in super.subviews) {
+    UIView *sup = host.superview;
+    if (sup) {
+        for (UIView *sib in sup.subviews) {
             if (sib == host || sib.hidden || VGIsOurs(sib)) continue;
-            if (!VGLooksLikeSkin(sib)) continue;
             CGSize s = sib.bounds.size;
             if (s.width <= 0.5 || s.height <= 0.5) continue;
+            if (s.width > 700 || s.height > 700) continue;
             if (s.width + 1 < hs.width || s.height + 1 < hs.height) continue;
+            if (s.width > hs.width + 80 || s.height > hs.height + 80) continue;
             [out addObject:sib];
         }
     }
 
-    // 2) 内部层：默认**不扫**。深处那个 MTMaterialView 是音量条的"槽"，
-    //    把它关掉之后白色填充条失去对比，音量大小就看不见了（0.2.8 的教训）。
-    //    只有打开「深度清理底板」才连它一起关。
-    if (VGDeepClean()) VGCollectSkinsInside(host, hs, out, 3);
-
-    // 3) 祖先不处理：宿主是它的后代，alpha=0 会把整个 HUD 弄没
+    for (UIView *sub in host.subviews) {
+        if (VGIsOurs(sub)) continue;
+        if (!VGLooksLikeSkin(sub)) continue;
+        if (VGCarriesContent(sub)) continue;
+        CGSize s = sub.bounds.size;
+        if (s.width <= 0.5 || s.height <= 0.5) continue;
+        [out addObject:sub];
+    }
     return out;
 }
 
-static void VGApplySkinReplace(UIView *host, VGDecorState *st) {
-    if (!st) return;
-
-    // 关掉开关时把之前隐藏的原生底板全部还原
-    if (!VGReplaceSkin()) {
-        for (NSDictionary *d in st.skinSnapshots) {
-            UIView *v = d[@"v"];
-            if (v) v.alpha = [d[@"a"] doubleValue];
-        }
-        [st.skinSnapshots removeAllObjects];
-        VGRestoreBorders(st);
-        st.skinHidden = NO;
-        return;
-    }
-
-    if (!st.skinSnapshots) st.skinSnapshots = [NSMutableArray array];
-
-    NSArray<UIView *> *skins = VGFindNativeSkins(host);
-    if (!skins.count) return;
-
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    for (UIView *v in skins) {
-        if (v == host) continue;
-        if ([host isDescendantOfView:v]) continue;   // 安全兜底
-
-        BOOL known = NO;
-        for (NSDictionary *d in st.skinSnapshots) {
-            if (d[@"v"] == v) { known = YES; break; }
-        }
-        if (!known) {
-            [st.skinSnapshots addObject:@{ @"v": v, @"a": @(v.alpha) }];
-        }
-        if (fabs(v.alpha) > 0.001) {
-            v.alpha = 0.0;
-            VGLog(@"skin hidden: %@", NSStringFromClass([v class]));
-        }
-    }
-    [CATransaction commit];
-
-    st.skinHidden = YES;
-}
-
-#pragma mark - 清掉祖先的底色（那个"框"真正的来源）
-
-// 胶囊外面套着的那圈更大的方框，往往不是独立视图，而是某一层的 backgroundColor。
-// 清 backgroundColor 不影响它的子视图，比 alpha=0 安全得多——
-// alpha=0 会把整个子树（包括我们自己的宿主和填充条）一起弄没。
-// 系统给音量条加的那圈 1px 细边是 layer.borderWidth，不是背景色。
-// 收缩状态下整条只有 8pt 宽，1px 边框会占满整个边缘，看着就是一个"框"。
-static void VGStripChrome(UIView *v, VGDecorState *st) {
-    if (!v || !st) return;
-    UIColor *bg = v.backgroundColor;
-    BOOL hasBg = (bg != nil && CGColorGetAlpha(bg.CGColor) >= 0.01);
-    CGFloat bw = v.layer.borderWidth;
-    if (!hasBg && bw <= 0.01) return;
-
-    // 系统可能在每次布局里把边框重设回来，快照只存第一次的原值
-    BOOL known = NO;
-    for (NSDictionary *d in st.bgSnapshots) {
-        if (d[@"v"] == v) { known = YES; break; }
-    }
-    if (!known) {
-        [st.bgSnapshots addObject:@{
-            @"v"  : v,
-            @"bg" : hasBg ? (id)bg : (id)[NSNull null],
-            @"bw" : @(bw)
-        }];
-    }
-    if (hasBg) v.backgroundColor = [UIColor clearColor];
-    v.layer.borderWidth = 0;
-    VGLog(@"strip chrome: %@ bg=%d bw=%.1f", NSStringFromClass([v class]), (int)hasBg, bw);
-}
-
-static void VGClearAncestorBackgrounds(UIView *host, VGDecorState *st) {
-    if (!st) return;
-    if (!st.bgSnapshots) st.bgSnapshots = [NSMutableArray array];
-
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-
-    VGStripChrome(host, st);
-
-    for (UIView *sub in host.subviews) {
-        if (sub == st.backdrop || sub == st.rim) continue;
-        VGStripChrome(sub, st);
-    }
-
-    UIView *anc = host.superview;
-    for (NSUInteger i = 0; i < 4 && anc; i++, anc = anc.superview) {
-        CGSize s = anc.bounds.size;
-        if (s.width <= 0 || s.height <= 0) continue;
-        if (s.width > 600 || s.height > 600) break;
-
-        CGRect hf = [host convertRect:host.bounds toView:anc];
-        if (!CGRectContainsRect(CGRectInset(anc.bounds, -1, -1), hf)) continue;
-
-        VGStripChrome(anc, st);
-    }
-
-    [CATransaction commit];
-}
-
-#pragma mark - 清掉兄弟层的描边（"尖尖的"真正来源）
-
-// 真机诊断（0.3.0 前）抓到的最后一行结构是：
-//
-//     s MTMaterialView 7x134 nil b1.5 a0.00
-//     s UIView        7x134 nil b1.5 a1.00   ← 这层一直在画
-//     s MTMaterialView 7x134 nil b1.5 a0.00
-//
-// 三个平级兄弟全都带 b1.5 —— borderWidth 1.5pt。
-// 而宿主本身只有 **7pt 宽**，左右各 1.5pt 的描边就吃掉 3pt，整条只剩一条亮线；
-// 圆角一收口，两端就挤成"尖"。这不是圆角算错，是这圈描边太宽。
-//
-// 所以这里只做一件事：把宿主周围（兄弟层 + 近两层祖先）的 borderWidth 归零。
-// **不动 alpha、不动 backgroundColor**，因此不可能把音量数字/填充条弄没
-// —— 0.2.6 那种"整条同尺寸兄弟一律 alpha=0"的写法会顺带毁掉颜色，不再重犯。
-static void VGStripBordersAround(UIView *host, VGDecorState *st) {
-    if (!host || !st) return;
-    if (!st.borderSnapshots) st.borderSnapshots = [NSMutableArray array];
-
-    NSMutableArray<UIView *> *targets = [NSMutableArray array];
-    [targets addObject:host];
-
-    UIView *sup = host.superview;
-    if (sup) {
-        for (UIView *sib in sup.subviews) {
-            if (sib == host || VGIsOurs(sib)) continue;
-            CGSize s = sib.bounds.size;
-            if (s.width <= 0.5 || s.height <= 0.5) continue;
-            if (s.width > 700 || s.height > 700) continue;
-            // 只要"不比宿主小多少"的兄弟，别去动整个 HUD 容器里的无关视图
-            CGSize hs = host.bounds.size;
-            if (s.width + 8 < hs.width || s.height + 8 < hs.height) continue;
-            [targets addObject:sib];
-        }
-    }
-
-    UIView *anc = sup;
-    for (int i = 0; i < 2 && anc; i++, anc = anc.superview) {
-        CGSize s = anc.bounds.size;
-        if (s.width <= 0.5 || s.height <= 0.5) continue;
-        if (s.width > 700 || s.height > 700) break;
-        [targets addObject:anc];
-    }
-
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    for (UIView *v in targets) {
-        CGFloat bw = v.layer.borderWidth;
-        if (bw <= 0.01) continue;
-
-        BOOL known = NO;
-        for (NSDictionary *d in st.borderSnapshots) {
-            if (d[@"v"] == v) { known = YES; break; }
-        }
-        if (!known) {
-            UIColor *bc = v.layer.borderColor ? [UIColor colorWithCGColor:v.layer.borderColor] : nil;
-            [st.borderSnapshots addObject:@{
-                @"v" : v,
-                @"w" : @(bw),
-                @"c" : bc ? (id)bc : (id)[NSNull null]
-            }];
-        }
-        v.layer.borderWidth = 0;
-        VGLog(@"border off: %@ %.1f", NSStringFromClass([v class]), bw);
-    }
-    [CATransaction commit];
-}
-
-static void VGRestoreBorders(VGDecorState *st) {
-    if (!st.borderSnapshots.count) return;
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    for (NSDictionary *d in st.borderSnapshots) {
-        UIView *v = d[@"v"];
-        if (!v) continue;
-        v.layer.borderWidth = [d[@"w"] doubleValue];
-        id c = d[@"c"];
-        v.layer.borderColor = [c isKindOfClass:[UIColor class]] ? ((UIColor *)c).CGColor : NULL;
-    }
-    [CATransaction commit];
-    [st.borderSnapshots removeAllObjects];
-}
-
-#pragma mark - 结构诊断（写进设置面板，用户直接截图）
-
-// 把这一层的子图层类名列出来 —— 牌子是 UIView 不代表它没在画东西，
-// 真正的"框"经常是挂在它图层上的 CABackdropLayer / CABackdropLayer 子类。
-static NSString *VGLayerBrief(UIView *v) {
-    NSArray<CALayer *> *subs = v.layer.sublayers;
-    if (!subs.count) return @"-";
-    NSMutableArray<NSString *> *names = [NSMutableArray array];
-    NSUInteger i = 0;
-    for (CALayer *l in subs) {
-        if (i++ >= 3) { [names addObject:@".."]; break; }
-        [names addObject:NSStringFromClass([l class])];
-    }
-    return [names componentsJoinedByString:@","];
-}
-
-static NSString *VGDiagLine(UIView *v, NSString *tag) {
-    UIColor *bg = v.backgroundColor;
-    NSString *bgs = @"nil";
-    if (bg) bgs = (CGColorGetAlpha(bg.CGColor) < 0.01) ? @"clear" : @"BG";
-    CGSize s = v.bounds.size;
-    return [NSString stringWithFormat:@"%@%@ %.0fx%.0f %@ b%.1f a%.2f [%@]",
-            tag, NSStringFromClass([v class]), s.width, s.height, bgs,
-            v.layer.borderWidth, v.alpha, VGLayerBrief(v)];
-}
-
-static void VGDumpTree(UIView *v, NSString *prefix, int depth,
-                       NSMutableArray<NSString *> *lines, NSUInteger budget) {
-    if (depth <= 0) return;
-    for (UIView *s in v.subviews) {
-        if (lines.count >= budget) return;
-        [lines addObject:VGDiagLine(s, prefix)];
-        VGDumpTree(s, [prefix stringByAppendingString:@"."], depth - 1, lines, budget);
-    }
-}
-
-// 抓一份结构快照。key 不同 → 存到不同的键里，
-// 设置面板会把 BEFORE / AFTER 两段都列出来，一眼看出一项改动有没有生效。
-static void VGSaveDiagTo(UIView *host, NSString *key, CGSize *lastSize) {
-    if (!host) return;
-    CGSize hs = host.bounds.size;
-    if (hs.width < 1 || hs.height < 1) return;   // 还没布局，抓了也是 0
-
-    // 展开和收缩是两种尺寸，各自抓一次；最后一次（收缩）会覆盖前面的
-    if (!lastSize) return;
-    if (CGSizeEqualToSize(*lastSize, hs)) return;
-    *lastSize = hs;
-
-    NSMutableArray<NSString *> *lines = [NSMutableArray array];
-    [lines addObject:[NSString stringWithFormat:@"host %@ %.0fx%.0f",
-                      NSStringFromClass([host class]),
-                      host.bounds.size.width, host.bounds.size.height]];
-
-    // 1) 宿主子树，往下 3 层
-    VGDumpTree(host, @" .", 3, lines, 20);
-
-    // 2) 兄弟 + 兄弟的子树（底板常常藏在兄弟的子层里）
-    UIView *sup = host.superview;
-    if (sup) {
-        for (UIView *s in sup.subviews) {
-            if (s == host) continue;
-            if (lines.count >= 34) break;
-            [lines addObject:VGDiagLine(s, @" s")];
-            VGDumpTree(s, @"  s.", 2, lines, 44);
-        }
-    }
-
-    // 3) 祖先
-    UIView *anc = sup;
-    for (int i = 0; i < 4 && anc; i++, anc = anc.superview) {
-        [lines addObject:VGDiagLine(anc, [NSString stringWithFormat:@"^%d", -(i + 1)])];
-    }
-
-    NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:VGDomain];
-    [d setObject:lines forKey:key];
-    [d synchronize];
-}
-
-// 改动前（这是我们还没动手时的系统原值）
-static void VGSaveDiag(UIView *host) {
-    static CGSize lastSize = {0, 0};
-    VGSaveDiagTo(host, @"Diag", &lastSize);
-}
-
-// 改动后（下一轮布局时抓，此时 borderWidth / alpha 已经被我们改过）
-static void VGSaveDiagAfter(UIView *host) {
-    static CGSize lastSize = {0, 0};
-    VGSaveDiagTo(host, @"DiagAfter", &lastSize);
-}
-
-#pragma mark - 消除容器自带的外发光（真正的那圈"虚影"）
-
-// 系统 HUD 容器自己带一层阴影/外发光，外面那层皮还是原来那个胶囊形状。
-// 我们把里面那层的圆角改小之后，外面这层原胶囊的弧线就会从缝里露出来一圈，
-// 看着就是"边缘虚影"。这里把外层一起圆成同样的形状并裁掉，阴影一并清掉。
-
-static NSDictionary *VGSnapshotView(UIView *v) {
+static NSDictionary *VGSkinSnapshot(UIView *v) {
     CALayer *l = v.layer;
     return @{
         @"v"  : v,
         @"r"  : @(l.cornerRadius),
         @"cc" : (l.cornerCurve ?: @""),
         @"m"  : @(l.masksToBounds),
-        @"so" : @(l.shadowOpacity),
-        @"sr" : @(l.shadowRadius),
-        @"ow" : @(l.shadowOffset.width),
-        @"oh" : @(l.shadowOffset.height),
+        @"bw" : @(l.borderWidth),
+        @"bc" : l.borderColor ? (id)[UIColor colorWithCGColor:l.borderColor] : (id)[NSNull null],
     };
 }
 
-static void VGRestoreView(NSDictionary *d) {
+static void VGRestoreSkin(NSDictionary *d) {
     UIView *v = d[@"v"];
     if (!v) return;
     CALayer *l = v.layer;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     l.cornerRadius  = [d[@"r"] doubleValue];
-    // 16.x SDK 里 cornerCurve 就是 NSString*（CALayerCornerCurve），不是枚举
     NSString *cc = d[@"cc"];
     if (cc.length) l.cornerCurve = cc;
     l.masksToBounds = [d[@"m"] boolValue];
-    l.shadowOpacity = [d[@"so"] floatValue];
-    l.shadowRadius  = [d[@"sr"] doubleValue];
-    l.shadowOffset  = CGSizeMake([d[@"ow"] doubleValue], [d[@"oh"] doubleValue]);
-    l.shadowPath    = nil;
+    l.borderWidth   = [d[@"bw"] doubleValue];
+    id bc = d[@"bc"];
+    l.borderColor = [bc isKindOfClass:[UIColor class]] ? ((UIColor *)bc).CGColor : NULL;
     [CATransaction commit];
 }
 
-// host 在 anc 里四周剩下的最小空隙；负数说明 host 伸出了 anc
-static CGFloat VGPadAroundHost(UIView *host, UIView *anc) {
-    CGRect r = [host convertRect:host.bounds toView:anc];
-    CGRect b = anc.bounds;
-    if (b.size.width <= 0 || b.size.height <= 0) return -1;
-    CGFloat l  = CGRectGetMinX(r) - CGRectGetMinX(b);
-    CGFloat rr = CGRectGetMaxX(b) - CGRectGetMaxX(r);
-    CGFloat t  = CGRectGetMinY(r) - CGRectGetMinY(b);
-    CGFloat bb = CGRectGetMaxY(b) - CGRectGetMaxY(r);
-    return MIN(MIN(l, rr), MIN(t, bb));
-}
+static void VGApplyNativeRounding(UIView *host, CGFloat radius, VGDecorState *st) {
+    if (!st || !host) return;
 
-static void VGApplyHaloFix(UIView *host, CGFloat radius, VGDecorState *st) {
-    if (!st) return;
-    // 布局回调是高频的，参数没变就别每次都拆了重建。
-    // 注意 size 也要参与判断：首次调用时 bounds 可能还是 0，
-    // 只比 radius 的话会把"找不到祖先"这个结果一直缓存下去。
-    CGSize hs = host.bounds.size;
-    if (st.haloSnapshots.count > 0 &&
-        fabs(st.lastHaloRadius - radius) < 0.5 &&
-        CGSizeEqualToSize(st.lastHaloSize, hs)) return;
-    st.lastHaloRadius = radius;
-    st.lastHaloSize = hs;
-
-    if (!st.haloSnapshots) {
-        st.haloSnapshots = [NSMutableArray array];
-    } else {
-        for (NSDictionary *d in st.haloSnapshots) VGRestoreView(d);
-        [st.haloSnapshots removeAllObjects];
+    if (!VGReplaceSkin()) {
+        for (NSDictionary *d in st.skinSnapshots) VGRestoreSkin(d);
+        [st.skinSnapshots removeAllObjects];
+        return;
     }
+
+    if (!st.skinSnapshots) st.skinSnapshots = [NSMutableArray array];
+    CGSize hs = host.bounds.size;
+
+    NSArray<UIView *> *targets = VGFindTargets(host);
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
+    for (UIView *v in targets) {
+        if (v == host) continue;
+        if ([host isDescendantOfView:v]) continue;
 
-    // 宿主自身：圆角之外不该再有任何阴影
-    [st.haloSnapshots addObject:VGSnapshotView(host)];
-    host.layer.shadowOpacity = 0;
-    host.layer.shadowRadius  = 0;
-    host.layer.shadowPath    = nil;
+        BOOL known = NO;
+        for (NSDictionary *d in st.skinSnapshots) {
+            if (d[@"v"] == v) { known = YES; break; }
+        }
+        if (!known) [st.skinSnapshots addObject:VGSkinSnapshot(v)];
 
-    // 往上最多三层：只处理比宿主大 0~26pt 的容器，那才是 HUD 自己的皮。
-    // 再大就是窗口级视图了，裁它会连同别的东西一起切掉。
-    UIView *anc = host.superview;
-    for (NSUInteger i = 0; i < 3 && anc; i++, anc = anc.superview) {
-        CGSize s = anc.bounds.size;
-        if (s.width <= 0 || s.height <= 0) continue;
-        if (s.width > 560 || s.height > 560) break;
+        // 比宿主大的层（外皮）要按外扩量加半径，否则弧线对不齐
+        CGSize s = v.bounds.size;
+        CGFloat pad = MIN(s.width - hs.width, s.height - hs.height) * 0.5;
+        if (pad < 0) pad = 0;
+        VGSetCorner(v.layer, radius + pad, s);
 
-        CGFloat pad = VGPadAroundHost(host, anc);
-        // 46pt：音量 HUD 的底板常常比滑块宽出一大截，26 会漏掉它
-        if (pad < -1.0 || pad > 46.0) continue;
+        // 那圈 1.5pt 描边在 7pt 宽的条上就是全部可见内容，必须清掉
+        v.layer.borderWidth = 0;
 
-        [st.haloSnapshots addObject:VGSnapshotView(anc)];
-        VGSetCorner(anc.layer, radius + MAX(pad, 0), anc.bounds.size);
-        anc.layer.shadowOpacity = 0;
-        anc.layer.shadowRadius  = 0;
-
-        VGLog(@"halo: %@ pad=%.1f -> r=%.1f",
-              NSStringFromClass([anc class]), pad, radius + MAX(pad, 0));
+        VGLog(@"round skin: %@ %.0fx%.0f r=%.1f", NSStringFromClass([v class]),
+              s.width, s.height, v.layer.cornerRadius);
     }
-
     [CATransaction commit];
 }
+
+#pragma mark - 结构诊断（写进设置面板，用户截图即可）
+
+static NSString *VGDiagLine(UIView *v, NSString *tag) {
+    UIColor *bg = v.backgroundColor;
+    NSString *bgs = @"nil";
+    if (bg) bgs = (CGColorGetAlpha(bg.CGColor) < 0.01) ? @"clear" : @"BG";
+    CGSize s = v.bounds.size;
+    return [NSString stringWithFormat:@"%@ %@ %.0fx%.0f %@ b%.1f r%.1f a%.2f",
+            tag, NSStringFromClass([v class]), s.width, s.height, bgs,
+            v.layer.borderWidth, v.layer.cornerRadius, v.alpha];
+}
+
+static void VGSaveDiag(UIView *host) {
+    if (!host) return;
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    [lines addObject:[NSString stringWithFormat:@"host %@ %.0fx%.0f",
+                      NSStringFromClass([host class]),
+                      host.bounds.size.width, host.bounds.size.height]];
+
+    NSUInteger n = 0;
+    for (UIView *s in host.subviews) {
+        if (n++ >= 6) break;
+        [lines addObject:VGDiagLine(s, @" .")];
+    }
+    n = 0;
+    UIView *sup = host.superview;
+    if (sup) {
+        for (UIView *s in sup.subviews) {
+            if (s == host) continue;
+            if (n++ >= 6) break;
+            [lines addObject:VGDiagLine(s, @" s")];
+        }
+    }
+    UIView *anc = sup;
+    for (int i = 0; i < 5 && anc; i++, anc = anc.superview) {
+        [lines addObject:VGDiagLine(anc, [NSString stringWithFormat:@"^%d", -(i + 1)])];
+    }
+
+    NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:VGDomain];
+    [d setObject:lines forKey:@"Diag"];
+    [d synchronize];
+}
+
+#pragma mark - 收尾
 
 void VGTeardownHUDView(UIView *host) {
     if (!host) return;
@@ -747,56 +439,21 @@ void VGTeardownHUDView(UIView *host) {
     [st.backdrop removeFromSuperview];
     [st.rim removeFromSuperview];
 
-    for (NSDictionary *d in st.haloSnapshots) VGRestoreView(d);
-    [st.haloSnapshots removeAllObjects];
-    st.lastHaloRadius = 0;
-
-    for (NSDictionary *d in st.skinSnapshots) {
-        UIView *v = d[@"v"];
-        if (v) v.alpha = [d[@"a"] doubleValue];
-    }
+    for (NSDictionary *d in st.skinSnapshots) VGRestoreSkin(d);
     [st.skinSnapshots removeAllObjects];
-    st.skinHidden = NO;
-
-    for (NSDictionary *d in st.bgSnapshots) {
-        UIView *v = d[@"v"];
-        if (!v) continue;
-        id bg = d[@"bg"];
-        if (bg != (id)[NSNull null]) v.backgroundColor = bg;
-        v.layer.borderWidth = [d[@"bw"] doubleValue];
-    }
-    [st.bgSnapshots removeAllObjects];
-
-    for (NSDictionary *d in st.markSnapshots) {
-        UIView *v = d[@"v"];
-        if (!v) continue;
-        v.layer.borderWidth = [d[@"bw"] doubleValue];
-        id bc = d[@"bc"];
-        v.layer.borderColor = [bc isKindOfClass:[UIColor class]] ? ((UIColor *)bc).CGColor : NULL;
-    }
-    [st.markSnapshots removeAllObjects];
 
     host.layer.cornerRadius = st.origRadius;
     host.layer.masksToBounds = st.origMasks;
-
-    for (UIView *sub in host.subviews) {
-        NSArray *orig = objc_getAssociatedObject(sub, kVGSubviewOrigKey);
-        if (!orig) continue;
-        sub.layer.cornerRadius = [orig[0] doubleValue];
-        sub.layer.masksToBounds = [orig[1] boolValue];
-        objc_setAssociatedObject(sub, kVGSubviewOrigKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
 
     objc_setAssociatedObject(host, kVGStateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     NSHashTable *set = VGDecoratedTable();
     [set removeObject:host];
 }
 
-// 安全阀：只有"HUD 尺寸"的视图才配装饰。
-// 万一向上层数调错、命中了全屏容器，绝不能用全屏白底 + 全屏描边糊一脸。
+// 安全阀：只有"HUD 尺寸"的视图才配装饰
 static BOOL VGSizeLooksLikeHUD(UIView *host) {
     CGSize size = host.bounds.size;
-    if (size.width <= 0 || size.height <= 0) return NO;      // 还没 layout，等下一轮
+    if (size.width <= 0 || size.height <= 0) return NO;
     if (size.width > 420 || size.height > 420) return NO;
 
     CGSize win = host.window.bounds.size;
@@ -810,26 +467,21 @@ static BOOL VGStyleActive(void) {
     return VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5);
 }
 
-// 圆角按"占胶囊半径的百分比"算：100 = 完全胶囊，越小越接近方角。
-// 用百分比而不是绝对点数，是因为 HUD 尺寸随机身/横竖屏变化，绝对点数会算飞。
+// 圆角按"占短边半径的百分比"算：100 = 完全胶囊
 static CGFloat VGResolvedRadius(UIView *host) {
     CGSize s = host.bounds.size;
     CGFloat half = MIN(s.width, s.height) * 0.5;
     if (half <= 0) return VGRadius();
 
-    // 旧版兼容：关掉自动胶囊且填了绝对点数，就用绝对点数
-    if (!VGAutoCapsule() && VGRadius() > 0.5) return MIN(VGRadius(), half - 0.5);
+    if (!VGAutoCapsule() && VGRadius() > 0.5) return MIN(VGRadius(), half);
 
     CGFloat pct = VGCornerPercent();
     if (pct < 6) pct = 6;
     if (pct > 100) pct = 100;
-    // 关键：半径永远比"短边一半"小 0.5pt。
-    // 等于一半时 four 个角的弧会挤成一个尖点（收缩态就是一根针），
-    // 这条限制是那个"尖尖的/边框"问题的正面解法。
-    return MIN(half * (pct / 100.0), MAX(half - 0.5, 0.5));
+    return half * (pct / 100.0);
 }
 
-// 从侧面滑入：只加 CAAnimation，不改 model 值，不会把 HUD 留在错误位置
+// 从侧面滑入：只加 CAAnimation，不改 model 值
 static void VGPlaySlideIn(UIView *host) {
     CALayer *layer = host.layer;
     CGFloat offset = host.bounds.size.width + 24;
@@ -846,72 +498,6 @@ static void VGPlaySlideIn(UIView *host) {
     fade.toValue = @1.0;
     fade.duration = 0.20;
     [layer addAnimation:fade forKey:@"vg.fadeIn"];
-}
-
-// 排查用：给每一层可疑容器描上不同的颜色。
-// 用户截图后，看到哪种颜色的框，就知道那个框是哪一层的 border 画的，
-// 不用再靠"猜类名 + 改代码 + 重新装包"来试。
-static void VGApplyMarks(UIView *host, VGDecorState *st) {
-    if (!st || !host) return;
-    if (!st.markSnapshots) st.markSnapshots = [NSMutableArray array];
-
-    if (!VGMarkFrames()) {
-        for (NSDictionary *d in st.markSnapshots) {
-            UIView *v = d[@"v"];
-            if (!v) continue;
-            v.layer.borderWidth = [d[@"bw"] doubleValue];
-            id bc = d[@"bc"];
-            v.layer.borderColor = [bc isKindOfClass:[UIColor class]] ? ((UIColor *)bc).CGColor : NULL;
-        }
-        [st.markSnapshots removeAllObjects];
-        return;
-    }
-
-    static NSArray<UIColor *> *palette;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        palette = @[[UIColor redColor], [UIColor greenColor], [UIColor blueColor],
-                    [UIColor yellowColor], [UIColor magentaColor], [UIColor cyanColor],
-                    [UIColor orangeColor], [UIColor whiteColor]];
-        // NSStringFromClass 之外的顺序说明写在设置面板的页脚里
-    });
-
-    NSMutableArray<UIView *> *targets = [NSMutableArray array];
-    UIView *anc = host.superview;
-    for (int i = 0; i < 4 && anc; i++, anc = anc.superview) [targets addObject:anc];
-
-    CGSize hs = host.bounds.size;
-    UIView *sup = host.superview;
-    if (sup) {
-        for (UIView *sib in sup.subviews) {
-            if (sib == host) continue;
-            CGSize s = sib.bounds.size;
-            if (s.width + 1 < hs.width || s.height + 1 < hs.height) continue;
-            [targets addObject:sib];
-        }
-    }
-    [targets addObject:host];   // 最后一个是宿主本身（白色）
-
-    NSUInteger idx = 0;
-    for (UIView *v in targets) {
-        BOOL known = NO;
-        for (NSDictionary *d in st.markSnapshots) {
-            if (d[@"v"] == v) { known = YES; break; }
-        }
-        if (!known) {
-            UIColor *bc = v.layer.borderColor ? [UIColor colorWithCGColor:v.layer.borderColor] : nil;
-            [st.markSnapshots addObject:@{
-                @"v"  : v,
-                @"bw" : @(v.layer.borderWidth),
-                @"bc" : bc ?: (id)[NSNull null]
-            }];
-        }
-        UIColor *c = palette[idx % palette.count];
-        v.layer.borderColor = c.CGColor;
-        v.layer.borderWidth = 1.5;
-        VGLog(@"mark %lu %@", (unsigned long)idx, NSStringFromClass([v class]));
-        idx++;
-    }
 }
 
 void VGDecorateHUDView(UIView *host) {
@@ -933,9 +519,6 @@ void VGDecorateHUDView(UIView *host) {
     CGFloat radius = VGResolvedRadius(host);
     gLastHost = host;
 
-    // 抓结构要在"清边框"之前，不然记下来的都是被我们改过的值
-    VGSaveDiag(host);
-
     VGDecorState *st = objc_getAssociatedObject(host, kVGStateKey);
     if (!st && VGHasDecoratedRelative(host)) {
         VGLog(@"skip %@ (relative already decorated)", NSStringFromClass([host class]));
@@ -947,13 +530,14 @@ void VGDecorateHUDView(UIView *host) {
         st.host = host;
         st.origRadius = host.layer.cornerRadius;
         st.origMasks = host.layer.masksToBounds;
+        st.skinSnapshots = [NSMutableArray array];
 
         VGGlassBackdrop *back = [[VGGlassBackdrop alloc] initWithFrame:host.bounds];
         back.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        // 夹在"背景材质之上、内容(图标/数字)之下"：既透出玻璃，又不挡音量显示
+        // 夹在"背景材质之上、内容(图标/数字)之下"
         NSUInteger insertAt = 0;
         for (NSUInteger i = 0; i < host.subviews.count; i++) {
-            if (VGIsBackgroundLike(host.subviews[i])) insertAt = i + 1;
+            if (VGLooksLikeSkin(host.subviews[i])) insertAt = i + 1;
             else break;
         }
         [host insertSubview:back atIndex:insertAt];
@@ -972,79 +556,33 @@ void VGDecorateHUDView(UIView *host) {
         VGLog(@"decorate host=%@ bounds=%@", NSStringFromClass([host class]),
               NSStringFromCGRect(host.bounds));
 
+        VGSaveDiag(host);
+
         if (VGSlideIn()) VGPlaySlideIn(host);
     }
 
     [st.backdrop setFrame:host.bounds];
     [st.rim setFrame:host.bounds];
 
-    VGSetCorner(host.layer, radius, host.bounds.size);
+    // 宿主自己也要圆（它可能就是那个看得见的"条"）
+    host.layer.cornerRadius = radius;
+    host.layer.cornerCurve  = (radius >= MIN(host.bounds.size.width,
+                                             host.bounds.size.height) * 0.5 - 1.0)
+                              ? @"circular" : @"continuous";
+    host.layer.masksToBounds = YES;
 
-    // 材质/模糊层也得跟着圆，否则四角会露出直角
-    for (UIView *sub in host.subviews) {
-        if (sub == st.backdrop || sub == st.rim) continue;
-        if (!VGIsBackgroundLike(sub)) continue;
-        if (!objc_getAssociatedObject(sub, kVGSubviewOrigKey)) {
-            objc_setAssociatedObject(sub, kVGSubviewOrigKey,
-                                     @[@(sub.layer.cornerRadius), @(sub.layer.masksToBounds)],
-                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
-        VGSetCorner(sub.layer, radius, sub.bounds.size);
-    }
+    // 核心：把系统原生底板改成圆角，**不隐藏、不改 alpha**
+    VGApplyNativeRounding(host, radius, st);
 
-    // 关键一步：先把系统那层方形底板换掉。
-    // 不换的话，圆角外面永远露着方底的四条边——那圈"虚影"就是这么来的。
-    VGApplySkinReplace(host, st);
-    // 再把祖先链上那些"方框底色"清掉（胶囊外圈那层更大的浅色框）
-    VGClearAncestorBackgrounds(host, st);
-    // 最后清掉兄弟层身上的 1.5pt 描边 —— 收缩态那个"尖尖的"就是它
-    if (VGReplaceSkin()) VGStripBordersAround(host, st);
-    else VGRestoreBorders(st);
-
-    // 底板没了就没人提供"存在感"，这里给玻璃托个底。
-    // 但**不再强开模糊**——那样"额外模糊"开关等于失效，画面会一片发白。
+    // 可选自绘层，默认都是关的（Tint=0 / Rim=off），所以不影响原生外观
     CGFloat tint = VGTintAlpha();
     BOOL blur = VGExtraBlur();
-    if (st.skinHidden && tint < 0.10) tint = 0.10;
-
-    // 收缩态那条只有 7pt 宽。这种宽度下任何一条 1pt 边的占比都超过 7%，
-    // 收口处必然被看成"尖"。既然去不掉，就按用户给的办法——**直接填满**：
-    // 把底色抬到接近实心，整条变成一个实心胶囊，边缘那点差异就被吃掉了。
-    // 只在"比手指还窄"时生效，展开态（29pt 以上）不受影响。
-    CGFloat shortSide = MIN(host.bounds.size.width, host.bounds.size.height);
-    BOOL narrow = (shortSide > 0.5 && shortSide < 16.0);
-    if (VGFillNarrow() && narrow) {
-        tint = MAX(tint, 0.46);
-    }
-
     [st.backdrop applyRadius:radius tint:tint blur:blur];
     st.rim.hidden = !VGRimEnabled();
     [st.rim applyRadius:radius];
 
-    // 排查用：只看系统原样，不叠我们的玻璃
-    if (VGHideGlass()) {
-        st.backdrop.hidden = YES;
-        st.rim.hidden = YES;
-    } else {
-        st.backdrop.hidden = NO;
-    }
-
-    // 排查用：给每一层可疑的容器描上不同颜色，一眼看出那个"框"是谁画的
-    VGApplyMarks(host, st);
-
-    // 最后再处理外圈：要放在宿主圆角设好之后，不然算出来的 pad 是旧的
-    if (VGKillHalo()) {
-        VGApplyHaloFix(host, radius, st);
-    } else if (st.haloSnapshots.count > 0) {
-        // 关掉这个开关时要把之前清掉的阴影还原，不然它会一直"看不见"
-
-        for (NSDictionary *d in st.haloSnapshots) VGRestoreView(d);
-        [st.haloSnapshots removeAllObjects];
-        st.lastHaloRadius = 0;
-    }
-
-    // 改完之后再抓一份，和前面的 BEFORE 对照着看就知道改没改到
-    VGSaveDiagAfter(host);
+    st.lastRadius = radius;
+    st.lastSize = host.bounds.size;
 }
 
 void VGRefreshDecor(void) {
