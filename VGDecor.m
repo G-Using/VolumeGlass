@@ -386,49 +386,6 @@ static void VGApplyNativeRounding(UIView *host, CGFloat radius, VGDecorState *st
     [CATransaction commit];
 }
 
-#pragma mark - 结构诊断（写进设置面板，用户截图即可）
-
-static NSString *VGDiagLine(UIView *v, NSString *tag) {
-    UIColor *bg = v.backgroundColor;
-    NSString *bgs = @"nil";
-    if (bg) bgs = (CGColorGetAlpha(bg.CGColor) < 0.01) ? @"clear" : @"BG";
-    CGSize s = v.bounds.size;
-    return [NSString stringWithFormat:@"%@ %@ %.0fx%.0f %@ b%.1f r%.1f a%.2f",
-            tag, NSStringFromClass([v class]), s.width, s.height, bgs,
-            v.layer.borderWidth, v.layer.cornerRadius, v.alpha];
-}
-
-static void VGSaveDiag(UIView *host) {
-    if (!host) return;
-    NSMutableArray<NSString *> *lines = [NSMutableArray array];
-    [lines addObject:[NSString stringWithFormat:@"host %@ %.0fx%.0f",
-                      NSStringFromClass([host class]),
-                      host.bounds.size.width, host.bounds.size.height]];
-
-    NSUInteger n = 0;
-    for (UIView *s in host.subviews) {
-        if (n++ >= 6) break;
-        [lines addObject:VGDiagLine(s, @" .")];
-    }
-    n = 0;
-    UIView *sup = host.superview;
-    if (sup) {
-        for (UIView *s in sup.subviews) {
-            if (s == host) continue;
-            if (n++ >= 6) break;
-            [lines addObject:VGDiagLine(s, @" s")];
-        }
-    }
-    UIView *anc = sup;
-    for (int i = 0; i < 5 && anc; i++, anc = anc.superview) {
-        [lines addObject:VGDiagLine(anc, [NSString stringWithFormat:@"^%d", -(i + 1)])];
-    }
-
-    NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:VGDomain];
-    [d setObject:lines forKey:@"Diag"];
-    [d synchronize];
-}
-
 #pragma mark - 收尾
 
 void VGTeardownHUDView(UIView *host) {
@@ -557,8 +514,6 @@ void VGDecorateHUDView(UIView *host) {
 
         VGLog(@"decorate host=%@ bounds=%@", NSStringFromClass([host class]),
               NSStringFromCGRect(host.bounds));
-
-        VGSaveDiag(host);
 
         if (VGSlideIn()) VGPlaySlideIn(host);
     }
