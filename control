@@ -1,6 +1,6 @@
 Package: com.shiyi.volumeglass
 Name: 音量玻璃
-Version: 0.4.1
+Version: 0.4.2
 Architecture: iphoneos-arm
 Description: 把系统音量 HUD 的方角改成圆角
  保留 iOS 原生材质（半透明、随壁纸变化、模糊），只在其上设置圆角，

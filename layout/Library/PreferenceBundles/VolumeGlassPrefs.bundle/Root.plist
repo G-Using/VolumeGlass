@@ -8,7 +8,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>音量玻璃 0.4.1</string>
+			<string>音量玻璃 0.4.2</string>
 			<key>footerText</key>
 			<string>不再隐藏系统底板，而是直接把它改成圆角。所以默认状态下外观和 iOS 原样完全一致，只是方角变成圆角。</string>
 		</dict>
