@@ -324,6 +324,7 @@ static void VGCCImageLoaded(const struct mach_header *header, intptr_t slide) {
     if (!dladdr(header, &info) || !info.dli_fname) return;
     if (!strstr(info.dli_fname, "/ControlCenterUIKit.framework/") &&
         !strstr(info.dli_fname, "/MediaControls.framework/") &&
+        !strstr(info.dli_fname, "/ControlCenterUI.framework/") &&
         !strstr(info.dli_fname, "/DisplayModule.bundle/")) return;
     // Loader callbacks must not create UIKit objects or install hooks in-lock.
     dispatch_async(dispatch_get_main_queue(), ^{ VGInstallControlCenterHooks(); });
@@ -419,6 +420,8 @@ void VGInstallControlCenterHooks(void) {
     // layout. These are real module/view APIs, not the iOS 17 slider callback.
     for (NSArray<NSString *> *entry in @[
         @[@"CCUIDisplayModuleViewController", @"willTransitionToExpandedContentMode:"],
+        @[@"CCUIDisplayModuleViewController", @"didTransitionToExpandedContentMode:"],
+        @[@"MRUVolumeViewController", @"didTransitionToExpandedContentMode:"],
         @[@"MediaControlsVolumeViewController", @"willTransitionToExpandedContentMode:"],
         @[@"MRUVolumeView", @"setExpanded:"]]) {
         NSString *key = [entry componentsJoinedByString:@"|"];
@@ -435,6 +438,7 @@ void VGInstallControlCenterHooks(void) {
             for (UIView *slider in VGCCSliders.allObjects) {
                 for (UIResponder *r = slider; r; r = r.nextResponder) {
                     if (r != owner) continue;
+                    VGCCApply(slider);
                     [slider setNeedsLayout];
                     break;
                 }
@@ -442,6 +446,51 @@ void VGInstallControlCenterHooks(void) {
         });
         MSHookMessageEx(cls, selector, hook, &next);
         [VGCCInstalledClasses addObject:key];
+    }
+    // The module platter has its OWN corner-radius input. Changing only the
+    // slider leaves that background at the old rounded rectangle until a value
+    // change happens to trigger another layout pass. Supply the expanded shape
+    // to the module host at the source, before it builds its transition.
+    for (NSString *name in @[@"CCUIDisplayModuleViewController", @"MRUVolumeViewController", @"MediaControlsVolumeViewController"]) {
+        NSString *key = [name stringByAppendingString:@"|expandedPlatterRadius"];
+        if ([VGCCInstalledClasses containsObject:key]) continue;
+        Class cls = objc_getClass(name.UTF8String);
+        SEL selector = NSSelectorFromString(@"preferredExpandedContinuousCornerRadius");
+        SEL widthSelector = NSSelectorFromString(@"preferredExpandedContentWidth");
+        SEL heightSelector = NSSelectorFromString(@"preferredExpandedContentHeight");
+        if (!cls || !VGCCHasMethod(cls, selector) || !VGCCHasMethod(cls, widthSelector) || !VGCCHasMethod(cls, heightSelector)) continue;
+        __block IMP next = NULL;
+        IMP hook = imp_implementationWithBlock(^CGFloat(id owner) {
+            CGFloat original = ((CGFloat (*)(id, SEL))next)(owner, selector);
+            CGFloat width = ((CGFloat (*)(id, SEL))objc_msgSend)(owner, widthSelector);
+            CGFloat height = ((CGFloat (*)(id, SEL))objc_msgSend)(owner, heightSelector);
+            if (!isfinite(width) || !isfinite(height) || width <= 1 || height <= 1) return original;
+            return MAX(0, MIN(width, height) * 0.5 - 0.5);
+        });
+        MSHookMessageEx(cls, selector, hook, &next);
+        [VGCCInstalledClasses addObject:key];
+    }
+    // Host container layout can reset _moduleMaterialView AFTER the child
+    // slider has already applied its surfaces. Reconcile after that exact host,
+    // not via touch events or a recurring timer, and never touch other modules.
+    {
+        NSString *key = @"CCUIContentModuleContentContainerView|layout";
+        Class cls = objc_getClass("CCUIContentModuleContentContainerView");
+        SEL selector = @selector(layoutSubviews);
+        if (cls && ![VGCCInstalledClasses containsObject:key] && VGCCHasMethod(cls, selector)) {
+            __block IMP next = NULL;
+            IMP hook = imp_implementationWithBlock(^(UIView *container) {
+                ((void (*)(id, SEL))next)(container, selector);
+                for (UIView *slider in VGCCSliders.allObjects) {
+                    if (![slider isDescendantOfView:container]) continue;
+                    VGCCSliderState *state = VGCCState(slider);
+                    if (state.applying || state.layoutDepth || state.radiusDepth) continue;
+                    VGCCApply(slider);
+                }
+            });
+            MSHookMessageEx(cls, selector, hook, &next);
+            [VGCCInstalledClasses addObject:key];
+        }
     }
     // The brightness extension assigns its sibling-material radius during the
     // controller layout. Reconcile only that controller's sliders afterwards.
