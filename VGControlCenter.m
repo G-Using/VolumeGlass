@@ -7,6 +7,7 @@
 #import <substrate.h>
 #import <mach-o/dyld.h>
 #import <string.h>
+#import <math.h>
 #import <dlfcn.h>
 
 // CC uses a different slider from the side-button HUD. Do not decorate its
@@ -84,7 +85,24 @@ static CGFloat VGCCRadius(UIView *slider) {
     CGFloat half = MIN(size.width, size.height) * 0.5;
     if (half <= 0.5) return 0;
     CGFloat radius = VGAutoCapsule() ? half * VGCornerPercent() / 100.0 : VGRadius();
-    return MAX(0, MIN(radius, half - 0.5));
+    radius = MAX(0, MIN(radius, half - 0.5));
+    // A full capsule can bite into the native low-value fill even when we no
+    // longer round that fill ourselves. Ease back towards Apple's own radius
+    // when there is insufficient filled height for the larger bottom corners.
+    SEL nativeGetter = NSSelectorFromString(@"continuousSliderCornerRadius");
+    SEL valueGetter = NSSelectorFromString(@"value");
+    SEL lengthGetter = NSSelectorFromString(@"sliderLengthForValue:");
+    if (size.height > size.width && [slider respondsToSelector:nativeGetter] &&
+        [slider respondsToSelector:valueGetter] && [slider respondsToSelector:lengthGetter]) {
+        CGFloat native = ((CGFloat (*)(id, SEL))objc_msgSend)(slider, nativeGetter);
+        float value = ((float (*)(id, SEL))objc_msgSend)(slider, valueGetter);
+        if (isfinite(native) && native > 0 && isfinite(value) && value >= 0 && value <= 1) {
+            CGFloat length = ((CGFloat (*)(id, SEL, float))objc_msgSend)(slider, lengthGetter, value);
+            if (isfinite(length) && length >= 0 && length <= size.height + 1)
+                radius = MIN(radius, MAX(MIN(native, half-0.5), length * 0.5));
+        }
+    }
+    return radius;
 }
 
 @interface VGCCSurfaceSnapshot : NSObject
@@ -182,15 +200,13 @@ static NSArray<UIView *> *VGCCSurfaces(UIView *slider) {
         }
         break;
     }
+    // Leave valueIndicatorClippingView and its moving fill untouched. Rounding
+    // both a short fill and the tall track intersects two different capsules,
+    // producing the pointed lens visible at low volume in 0.4.4.
     UIView *fill = VGCCViewForSelector(slider, @"valueIndicatorClippingView");
-    if (fill && [fill isDescendantOfView:slider]) {
-        [targets addObject:fill];
-        // Some builds use a full-track clip and a bottom-aligned moving fill.
-        // Round only full-width plain/material children, never glyphs or labels.
-        for (UIView *child in fill.subviews) {
-            BOOL plain = child.class == UIView.class || VGCCIsMaterial(child);
-            if (plain && fabs(child.bounds.size.width-fill.bounds.size.width) < 2 && child.bounds.size.height > 0)
-                [targets addObject:child];
+    if (fill) {
+        for (UIView *view in [targets.array copy]) {
+            if (view == fill || [view isDescendantOfView:fill]) [targets removeObject:view];
         }
     }
     return targets.array;
