@@ -1,134 +1,37 @@
 # VolumeGlass 音量玻璃
 
-## 0.4.6：固定外框与原生填充布局同步（待真机验收）
+作者 / 维护者：G-Using
 
-- 根据第二次录屏回归：撤销 0.4.5 的数值驱动外框半径，拖动时不再按数值改变整条滑杆轮廓。
-- 改为将固定圆角传入系统 `continuousSliderCornerRadius`，由原生布局重新计算填充几何，而不是仅修改外框图层。
-- 不给滑条本身或包含滑条的祖先额外开启裁剪；不手工倒圆移动填充，保留原生填充算法。背景材质跟随同一圆角，并保留去阴影、去描边处理。
-- 每个原生布局入口先恢复基线，调用期间使用独立 next IMP 与重入守卫；关闭或收起时恢复系统圆角参数和外皮属性。
-- 验收重点：低值是否仍挤尖、拖动时外框是否固定，以及主亮度/音量、两侧白点/夜览与关闭后的还原。
+包标识：`com.shiyi.volumeglass`（保留升级身份）
 
-## 0.4.5：低音量填充尖角
+## 0.4.7：无面板、默认启用
 
-- 撤销 0.4.4 对 `valueIndicatorClippingView` 及内部移动填充的额外圆角裁剪，保留系统数值填充形状，避免与外框胶囊相交形成尖端。
-- 低值时按原生填充长度限制新增的外框半径，最低保留原生半径；数值升高后连续恢复用户设置，所有配对材质采用相同半径。
-- 保留展开态白点/夜览兼容、去阴影与描边，以及 G-Using 作者信息；不改收起态或侧边 HUD。
-- 需真机检查从 0% 缓慢拖到 100%、低值附近反复拖动、展开收起，以及关闭插件后的还原。
+- 不再打包设置面板、PreferenceLoader 入口或 Preferences bundle。
+- 安装后随 SpringBoard 加载即启用；圆角固定为原插件设置中的 **100%**，不是 100pt。
+- 旧版偏好文件不再读取，也不删除；以前关闭插件或修改圆角的设置不会影响本版。
+- 保持截图中其余效果：额外底色 0、额外描边/模糊关闭、侧边音量 HUD 滑入保留、亮度 HUD 额外应用关闭；控制中心展开音量/亮度及白点、夜览滑条继续适配。
+- 针对展开瞬间尖角：在模块展开入口提前记录展开意图，在原生滑条布局前写入圆角参数，而非先绘制一帧旧形状再修正；保持原生填充算法，不额外裁剪移动填充。
+- 沿用局部去阴影、去边框处理，不隐藏系统材质、不裁全屏面板。
 
-## 0.4.4：展开态阴影、描边与两侧滑条
+## 安装和停用
 
-- 沿用侧边 HUD 的去外发光/描边思路：只清除滑条和贴合外皮上的阴影及边框，保留材质与透明度。
-- 统一主滑条、背景材质、填充的圆角，避免旧底板与新外轮廓叠出虚影。
-- 兼容 BetterCCBrightness 的白点、夜览两侧滑条及各自材质底板；填充可见端也应用圆角。
-- 原生布局前还原改动、布局后重新应用；关闭插件恢复原值，不隐藏材质、不改全屏背景。
-- Author / Maintainer 改为 G-Using；保留既有包名及偏好域以支持直接升级。
-- 需真机确认：三条滑杆高低数值、展开/收起、关闭插件；编译通过不代表视觉验收完成。
+安装 Rootless deb 后重启 SpringBoard，无需进入设置打开开关。
+升级包中不再含旧设置面板，包管理器升级时移除旧版对应文件。
+需要停用时在包管理器卸载插件，再重启 SpringBoard；本版没有设置开关。
 
-## 0.4.3：控制中心展开态圆角
+## 构建
 
-- 为长按展开的音量、亮度滑条单独应用现有圆角设置；不受「亮度 HUD」开关限制。
-- 保留原生材质、音量/亮度填充和水平数值分界，不添加 HUD 侧入动画。
-- 收起或关闭插件后恢复系统圆角，不裁剪外围按钮、标签或控制中心全屏背景。
-- 此路径独立于侧键 HUD；需在 iOS 15/16 真机检查展开、拖动、收起及关闭插件。
+固定 SDK：iPhoneOS 16.5；最低部署目标：iOS 15.0；架构：arm64、arm64e。
 
-
-把系统**音量 HUD**（贴左边缘那个竖条）做成 iOS 26 那种液态玻璃胶囊，并从侧面滑入。
-独立插件，不依赖、不改动任何第三方插件。
-
-针对的目标就是截图里那个东西：竖着的长条、上半截半透明、下半截白色填充。
-它本身没有圆角问题，问题是**材质太平**、没有玻璃边、出现得太生硬。
-
-```
-VolumeGlass/
-├── Makefile                       # theos 工程（tweak + 设置面板 bundle）
-├── control                        # deb 元信息
-├── VolumeGlass.plist              # 注入范围：com.apple.springboard
-├── Tweak.xm                       # hook 安装 + 音量/亮度判定 + 宿主层定位
-├── VGConfig.h/.m                  # 读 com.shiyi.volumeglass 偏好域
-├── VGDecor.h/.m                   # 胶囊圆角 + 玻璃底色 + 锥形渐变描边 + 侧面滑入
-├── VGRootListController.h/.m      # 设置面板控制器
-├── layout/                        # 静态文件（PreferenceLoader 入口 + 面板 specifier）
-└── .github/workflows/build.yml    # 云端编译，产出 deb
+```sh
+export THEOS="$HOME/theos"
+make package FINALPACKAGE=1
 ```
 
-## 1. 编译
+GitHub Actions 推送后构建，产物为 `VolumeGlass-deb`。
+构建 scheme 为 Rootless；其他越狱环境需使用对应转换/构建工具，不因名称就保证跨环境可直接安装。
 
-本机 Windows 的 lld 出不了可用 deb，走 GitHub Actions：
+## 验收边界
 
-```bash
-git init && git add . && git commit -m init
-git remote add origin git@github.com:<你的账号>/VolumeGlass.git
-git push -u origin main
-```
-
-推送后 Actions 自动跑，产物在 Artifacts → `VolumeGlass-deb`。
-有 macOS 也可以本地编：`export THEOS=~/theos && make package FINALPACKAGE=1`。
-
-## 2. 安装
-
-deb 传到手机，Filza / Sileo / `dpkg -i` 都行。装完自动 respawn SpringBoard。
-
-- rootless（8P）和 roothide（14PM）都能装：工程里没有绝对路径，偏好走 `CFPreferences`，
-  装载位置交给 theos 的 `rootless` scheme。
-- 依赖 `mobilesubstrate`，RootHide 上由 ElleKit 提供兼容层。
-
-## 3. 用法（先点预设，再微调）
-
-设置 → 音量玻璃 → **「套用 iOS 26 预设」**，然后按一下音量键。
-
-预设 = 自动胶囊 + 薄玻璃（底色 0.06）+ 额外模糊 + 玻璃描边 + 侧面滑入。
-
-| 项 | 默认 | 说明 |
-|---|---|---|
-| 启用 | 开 | 总开关 |
-| 自动胶囊 | 开 | 圆角取短边一半，竖条就是标准胶囊 |
-| 圆角 | 26 | 关掉自动胶囊后才生效，0~60 |
-| 玻璃底色 | 0.12 | 白色叠加，越大越"磨砂白" |
-| 玻璃描边 | 开 | 锥形渐变环，模仿液态玻璃的折射边 |
-| 额外模糊 | 关 | 再叠一层 `systemUltraThinMaterial`（预设会打开） |
-| 侧面滑入动画 | 开 | 从左侧 0.34s 弹入 + 淡入，纯 CAAnimation，不改 model 值 |
-| 亮度 HUD 也应用 | 关 | 亮度和音量共用一套 HUD 视图 |
-| 向上层数 | 0 | **套错层时调这个** |
-| 指定类名 | 空 | 直接点名要着色的视图类 |
-| 输出日志 | 关 | 打开后 `log stream --predicate 'eventMessage CONTAINS "VolumeGlass"'` 看类名 |
-
-## 4. 排查
-
-**完全没变化**
-1. 打开「输出日志」，按音量键，看有没有 `装饰 host=<类名> bounds=...`；
-2. 有这行但看不出变化 → 你选中的层不是可见的那个，把「指定类名」填父/子层类名；
-3. 没有这行 → HUD 类名和你系统版本不一致，把日志里的类名发我。
-
-**圆角套错了 / 整个屏幕糊了一层**
-不会发生：`VGSizeLooksLikeHUD()` 拦掉宽或高 > 420 的视图，还会拦掉和窗口等大的容器。
-
-**系统阴影没了**
-`masksToBounds` 会裁掉原视图的阴影。要阴影就把「玻璃描边」当阴影用，或者把圆角关小。
-
-**白苹果 / 循环重启**
-进安全模式（RootHide 音量下键启动），Sileo 里卸载 `com.shiyi.volumeglass`。
-
-## 5. 实现要点
-
-- **注入点**：`SBElasticHUDViewController`（`viewWillAppear:` / `viewDidLayoutSubviews`），
-  外加 `SBElasticSliderView`、`SBElasticVolumeSliderView`、`_CCUIBaseSliderContentView`
-  的 `layoutSubviews` 兜底 —— iOS 版本之间 HUD 层级会变，多挂几个不吃亏。
-- **音量/亮度区分**：扫 HUD 视图树 + 子控制器类名里有没有 `Volume` / `Brightness`，
-  判不出来按音量处理。
-- **胶囊圆角**：容器 `cornerRadius + cornerCurveContinuous + masksToBounds`，
-  材质/模糊子视图（类名含 `Material`/`VisualEffect`/`Backdrop`，或子层里有 `CABackdropLayer`）同步圆角，
-  否则四角会露出直角。原值存关联对象，关开关能还原。
-- **玻璃**：底色（白 + alpha）+ 顶部 55% 高光 + 锥形渐变描边（`kCAGradientLayerConic` + even-odd 环形遮罩）。
-  纯 CoreAnimation，不碰 `CABackdropLayer.filters` ——
-  **Liquidify 的 `LYGlassFilterGuard` 清洗过滤器时不会误伤**。
-- **侧面滑入**：`CABasicAnimation` 只做 presentation 层动画（`transform.translation.x` + `opacity`），
-  动画结束自动回落到真实位置，不会把 HUD 卡在错误坐标。
-- **安全阀**：尺寸判断 + 父子层去重（防止两条 hook 各套一圈描边）。
-
-## 6. 已知限制
-
-- **下半截的白色填充不动**。那是音量条的填充层，代表当前音量；改成半透明就看不见音量大小了。
-  现在的做法是把它一起裁成胶囊、只加描边和高光。
-- 锚点来自 iOS 16.x 的系统类名（与 Liquidify 常量池里的类名互相印证），**没在 16.5 实机跑过**。
-  第一次装完如果没效果，开日志把类名发我，改一行就能适配。
-- 只处理 HUD 本体，不管转场动画的中间态。
+本轮需确认设置入口消失、升级后自动启用、圆角固定 100%、反复长按展开首帧及低值慢拖、收起后原生小滑条是否正常。
+源码检查、编译、链接和安装包结构检查不等同真机视觉验收，展开瞬间效果仍需设备确认。

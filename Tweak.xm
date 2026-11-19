@@ -144,16 +144,6 @@ static void vg_sliderLayout(id self, SEL _cmd) {
     if (host) VGDecorateHUDView(host);
 }
 
-#pragma mark - 设置变更
-
-static void VGOnChanged(CFNotificationCenterRef center, void *observer, CFStringRef name,
-                        const void *object, CFDictionaryRef userInfo) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        VGRefreshDecor();
-        VGRefreshControlCenter();
-    });
-}
-
 __attribute__((constructor)) static void VGInit(void) {
     gVGInstalledHooks = [NSMutableSet set];
 
@@ -178,13 +168,8 @@ __attribute__((constructor)) static void VGInit(void) {
         else VGLog(@"ClassOverride %@ not exist", override);
     }
 
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
-                                    VGOnChanged,
-                                    (__bridge CFStringRef)VGChangedNotification,
-                                    NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
-
     dispatch_async(dispatch_get_main_queue(), ^{
         VGInstallControlCenterHooks();
     });
-    VGLog(@"VolumeGlass 0.4.6 loaded");
+    VGLog(@"VolumeGlass 0.4.7 loaded (fixed 100%%, no preferences)");
 }

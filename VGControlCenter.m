@@ -29,6 +29,7 @@
 @end
 
 static const void *VGCCStateKey = &VGCCStateKey;
+static const void *VGCCExpandedIntentKey = &VGCCExpandedIntentKey;
 static NSHashTable<UIView *> *VGCCSliders;
 static NSMutableSet<NSString *> *VGCCInstalledClasses;
 
@@ -64,6 +65,8 @@ static BOOL VGCCIsKind(id object, const char *name) {
 
 static BOOL VGCCIsExpanded(UIView *slider) {
     for (UIResponder *r = slider; r; r = r.nextResponder) {
+        NSNumber *intent = objc_getAssociatedObject(r, VGCCExpandedIntentKey);
+        if (intent) return intent.boolValue;
         if (VGCCIsKind(r, "MRUVolumeView")) {
             SEL getter = NSSelectorFromString(@"isExpanded");
             return [r respondsToSelector:getter] && ((BOOL (*)(id, SEL))objc_msgSend)(r, getter);
@@ -353,7 +356,28 @@ void VGInstallControlCenterHooks(void) {
                 state.applying = YES;
                 VGCCRestoreSurfaces(state);
                 BOOL active = VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5) && VGCCIsExpanded(slider);
-                if (!active) VGCCRestoreNativeModel(slider, state);
+                if (!active) {
+                    VGCCRestoreNativeModel(slider, state);
+                } else {
+                    // Seed the input BEFORE the first native fill layout. The
+                    // previous build corrected it only afterwards, leaving one
+                    // transition frame using mismatched track/fill geometry.
+                    SEL getter = NSSelectorFromString(@"continuousSliderCornerRadius");
+                    CGFloat configured = VGCCRadius(slider);
+                    CGFloat current = ((CGFloat (*)(id, SEL))objc_msgSend)(slider, getter);
+                    if (configured > 0 && fabs(current-configured) > 0.01) {
+                        if (!state.modelOverridden) {
+                            state.nativeRadius = current;
+                            state.hasNativeRadius = YES;
+                        }
+                        [CATransaction begin];
+                        [CATransaction setDisableActions:YES];
+                        state.modelOverridden = YES;
+                        ((void (*)(id, SEL, CGFloat))objc_msgSend)(slider,
+                            NSSelectorFromString(@"setContinuousSliderCornerRadius:"), configured);
+                        [CATransaction commit];
+                    }
+                }
                 state.applying = NO;
             }
             state.layoutDepth++;
@@ -390,6 +414,34 @@ void VGInstallControlCenterHooks(void) {
         MSHookMessageEx(cls, radius, radiusHook, &nextRadius);
         MSHookMessageEx(cls, layout, layoutHook, &nextLayout);
         [VGCCInstalledClasses addObject:name];
+    }
+    // Mark intent before the module changes its BOOL or performs any animation
+    // layout. These are real module/view APIs, not the iOS 17 slider callback.
+    for (NSArray<NSString *> *entry in @[
+        @[@"CCUIDisplayModuleViewController", @"willTransitionToExpandedContentMode:"],
+        @[@"MediaControlsVolumeViewController", @"willTransitionToExpandedContentMode:"],
+        @[@"MRUVolumeView", @"setExpanded:"]]) {
+        NSString *key = [entry componentsJoinedByString:@"|"];
+        if ([VGCCInstalledClasses containsObject:key]) continue;
+        Class cls = objc_getClass(entry[0].UTF8String);
+        SEL selector = NSSelectorFromString(entry[1]);
+        if (!cls || !VGCCHasMethod(cls, selector)) continue;
+        __block IMP next = NULL;
+        IMP hook = imp_implementationWithBlock(^(id owner, BOOL expanded) {
+            objc_setAssociatedObject(owner, VGCCExpandedIntentKey, @(expanded), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            ((void (*)(id, SEL, BOOL))next)(owner, selector, expanded);
+            // Existing visible sliders are ready for the next render commit.
+            // Sliders created by this transition go through the pre-layout hook.
+            for (UIView *slider in VGCCSliders.allObjects) {
+                for (UIResponder *r = slider; r; r = r.nextResponder) {
+                    if (r != owner) continue;
+                    [slider setNeedsLayout];
+                    break;
+                }
+            }
+        });
+        MSHookMessageEx(cls, selector, hook, &next);
+        [VGCCInstalledClasses addObject:key];
     }
     // The brightness extension assigns its sibling-material radius during the
     // controller layout. Reconcile only that controller's sliders afterwards.
