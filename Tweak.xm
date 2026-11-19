@@ -4,40 +4,46 @@
 #import <QuartzCore/QuartzCore.h>
 #import "VGConfig.h"
 #import "VGDecor.h"
+#import "VGControlCenter.h"
 
 typedef void (*VGAppearIMP)(id, SEL, BOOL);
 typedef void (*VGLayoutIMP)(id, SEL);
 
-static NSMutableDictionary<NSString *, NSValue *> *gOriginals;
+static NSMutableSet<NSString *> *gVGInstalledHooks;
 
-#pragma mark - 原实现查找（同一 SEL 可能被多个类 hook）
-
-static IMP VGOriginal(id self, SEL sel) {
-    Class c = object_getClass(self);
-    NSString *selName = NSStringFromSelector(sel);
-    while (c) {
-        NSString *key = [NSString stringWithFormat:@"%@|%@", NSStringFromClass(c), selName];
-        NSValue *v = gOriginals[key];
-        if (v) return (IMP)v.pointerValue;
-        c = class_getSuperclass(c);
-    }
-    return NULL;
-}
+#pragma mark - 每个安装点独立保存 next IMP，父子类不会串用
 
 static void VGInstall(Class cls, SEL sel, IMP replacement) {
     if (!cls) return;
-    Method m = class_getInstanceMethod(cls, sel);
-    if (!m) {
-        VGLog(@"%@ has no %@, skip", NSStringFromClass(cls), NSStringFromSelector(sel));
-        return;
+    NSString *key = [NSString stringWithFormat:@"%@|%@", NSStringFromClass(cls), NSStringFromSelector(sel)];
+    if ([gVGInstalledHooks containsObject:key]) return;
+    Method method = NULL;
+    for (Class c = cls; c && !method; c = class_getSuperclass(c)) {
+        unsigned count = 0;
+        Method *methods = class_copyMethodList(c, &count);
+        for (unsigned i = 0; i < count; i++) {
+            if (sel_isEqual(method_getName(methods[i]), sel)) { method = methods[i]; break; }
+        }
+        free(methods);
     }
-    IMP orig = NULL;
-    MSHookMessageEx(cls, sel, replacement, &orig);
-    if (orig) {
-        NSString *key = [NSString stringWithFormat:@"%@|%@", NSStringFromClass(cls), NSStringFromSelector(sel)];
-        gOriginals[key] = [NSValue valueWithPointer:(void *)orig];
-        VGLog(@"hooked %@ %@", NSStringFromClass(cls), NSStringFromSelector(sel));
+    if (!method) return;
+    unsigned args = method_getNumberOfArguments(method);
+    __block IMP next = NULL;
+    IMP wrapper = NULL;
+    if (args == 2) {
+        wrapper = imp_implementationWithBlock(^(id receiver) {
+            if (next) ((VGLayoutIMP)next)(receiver, sel);
+            ((VGLayoutIMP)replacement)(receiver, sel);
+        });
+    } else if (args == 3 && sel_isEqual(sel, @selector(viewWillAppear:))) {
+        wrapper = imp_implementationWithBlock(^(id receiver, BOOL animated) {
+            if (next) ((VGAppearIMP)next)(receiver, sel, animated);
+            ((VGAppearIMP)replacement)(receiver, sel, animated);
+        });
     }
+    if (!wrapper) return;
+    MSHookMessageEx(cls, sel, wrapper, &next);
+    [gVGInstalledHooks addObject:key];
 }
 
 #pragma mark - 找要着色的那层
@@ -101,9 +107,6 @@ static void VGDump(UIView *v, int depth) {
 #pragma mark - Hook 回调
 
 static void vg_viewWillAppear(id self, SEL _cmd, BOOL animated) {
-    IMP orig = VGOriginal(self, _cmd);
-    if (orig) ((VGAppearIMP)orig)(self, _cmd, animated);
-
     if (!VGEnabled()) return;
     UIViewController *vc = (UIViewController *)self;
     if (!VGShouldApply(vc)) {
@@ -117,9 +120,6 @@ static void vg_viewWillAppear(id self, SEL _cmd, BOOL animated) {
 }
 
 static void vg_viewDidLayout(id self, SEL _cmd) {
-    IMP orig = VGOriginal(self, _cmd);
-    if (orig) ((VGLayoutIMP)orig)(self, _cmd);
-
     if (!VGEnabled()) return;
     UIViewController *vc = (UIViewController *)self;
     if (!vc.isViewLoaded) return;
@@ -137,9 +137,6 @@ static BOOL VGInsideHUD(UIView *view) {
 }
 
 static void vg_sliderLayout(id self, SEL _cmd) {
-    IMP orig = VGOriginal(self, _cmd);
-    if (orig) ((VGLayoutIMP)orig)(self, _cmd);
-
     if (!VGEnabled()) return;
     UIView *slider = (UIView *)self;
     if (!VGInsideHUD(slider)) return;
@@ -151,11 +148,14 @@ static void vg_sliderLayout(id self, SEL _cmd) {
 
 static void VGOnChanged(CFNotificationCenterRef center, void *observer, CFStringRef name,
                         const void *object, CFDictionaryRef userInfo) {
-    VGRefreshDecor();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        VGRefreshDecor();
+        VGRefreshControlCenter();
+    });
 }
 
 __attribute__((constructor)) static void VGInit(void) {
-    gOriginals = [NSMutableDictionary dictionary];
+    gVGInstalledHooks = [NSMutableSet set];
 
     Class hud = objc_getClass("SBElasticHUDViewController");
     if (hud) {
@@ -183,5 +183,8 @@ __attribute__((constructor)) static void VGInit(void) {
                                     (__bridge CFStringRef)VGChangedNotification,
                                     NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    VGLog(@"VolumeGlass 0.4.2 loaded");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        VGInstallControlCenterHooks();
+    });
+    VGLog(@"VolumeGlass 0.4.3 loaded");
 }

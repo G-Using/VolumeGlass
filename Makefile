@@ -8,7 +8,7 @@ THEOS_PACKAGE_SCHEME = rootless
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = VolumeGlass
-VolumeGlass_FILES = Tweak.xm VGConfig.m VGDecor.m
+VolumeGlass_FILES = Tweak.xm VGConfig.m VGDecor.m VGControlCenter.m
 VolumeGlass_CFLAGS = -fobjc-arc
 VolumeGlass_FRAMEWORKS = UIKit QuartzCore
 VolumeGlass_LIBRARIES = substrate
