@@ -186,5 +186,5 @@ __attribute__((constructor)) static void VGInit(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         VGInstallControlCenterHooks();
     });
-    VGLog(@"VolumeGlass 0.4.5 loaded");
+    VGLog(@"VolumeGlass 0.4.6 loaded");
 }

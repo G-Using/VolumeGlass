@@ -16,6 +16,7 @@
 @property (nonatomic) BOOL applying;
 @property (nonatomic) BOOL applied;
 @property (nonatomic) BOOL hasNativeRadius;
+@property (nonatomic) BOOL modelOverridden;
 @property (nonatomic) NSUInteger layoutDepth;
 @property (nonatomic) NSUInteger radiusDepth;
 @property (nonatomic) CGFloat nativeRadius;
@@ -85,24 +86,8 @@ static CGFloat VGCCRadius(UIView *slider) {
     CGFloat half = MIN(size.width, size.height) * 0.5;
     if (half <= 0.5) return 0;
     CGFloat radius = VGAutoCapsule() ? half * VGCornerPercent() / 100.0 : VGRadius();
-    radius = MAX(0, MIN(radius, half - 0.5));
-    // A full capsule can bite into the native low-value fill even when we no
-    // longer round that fill ourselves. Ease back towards Apple's own radius
-    // when there is insufficient filled height for the larger bottom corners.
-    SEL nativeGetter = NSSelectorFromString(@"continuousSliderCornerRadius");
-    SEL valueGetter = NSSelectorFromString(@"value");
-    SEL lengthGetter = NSSelectorFromString(@"sliderLengthForValue:");
-    if (size.height > size.width && [slider respondsToSelector:nativeGetter] &&
-        [slider respondsToSelector:valueGetter] && [slider respondsToSelector:lengthGetter]) {
-        CGFloat native = ((CGFloat (*)(id, SEL))objc_msgSend)(slider, nativeGetter);
-        float value = ((float (*)(id, SEL))objc_msgSend)(slider, valueGetter);
-        if (isfinite(native) && native > 0 && isfinite(value) && value >= 0 && value <= 1) {
-            CGFloat length = ((CGFloat (*)(id, SEL, float))objc_msgSend)(slider, lengthGetter, value);
-            if (isfinite(length) && length >= 0 && length <= size.height + 1)
-                radius = MIN(radius, MAX(MIN(native, half-0.5), length * 0.5));
-        }
-    }
-    return radius;
+    // Fixed for a given slider size/settings; never derive track corners from value.
+    return MAX(0, MIN(radius, half - 0.5));
 }
 
 @interface VGCCSurfaceSnapshot : NSObject
@@ -212,7 +197,7 @@ static NSArray<UIView *> *VGCCSurfaces(UIView *slider) {
     return targets.array;
 }
 
-static void VGCCRoundSurface(UIView *view, CGFloat radius, NSMutableArray *snapshots) {
+static void VGCCRoundSurface(UIView *view, CGFloat radius, NSMutableArray *snapshots, BOOL clip) {
     CGFloat half = MIN(view.bounds.size.width, view.bounds.size.height) * 0.5;
     if (half <= 0.5) return;
     VGCCSurfaceSnapshot *snapshot = [VGCCSurfaceSnapshot new];
@@ -234,7 +219,8 @@ static void VGCCRoundSurface(UIView *view, CGFloat radius, NSMutableArray *snaps
     [snapshots addObject:snapshot];
     view.layer.cornerRadius = MIN(radius, half-0.5);
     view.layer.cornerCurve = kCACornerCurveCircular;
-    view.layer.masksToBounds = YES;
+    // Never add another clipping boundary over the native fill geometry.
+    if (clip) view.layer.masksToBounds = YES;
     // Same fix used for the side HUD: remove the native shadow/border chrome,
     // not the material itself. Keep the backdrop, opacity, filters and fill.
     view.layer.shadowOpacity = 0;
@@ -265,23 +251,54 @@ static void VGCCRestoreSurfaces(VGCCSliderState *state) {
     [CATransaction commit];
 }
 
+// Caller holds state.applying so our setters/layout wrappers only call next IMP.
+static void VGCCRestoreNativeModel(UIView *slider, VGCCSliderState *state) {
+    VGCCRestoreSurfaces(state);
+    if (!state.modelOverridden) return;
+    state.modelOverridden = NO;
+    ((void (*)(id, SEL, CGFloat))objc_msgSend)(slider,
+        NSSelectorFromString(@"setContinuousSliderCornerRadius:"), state.nativeRadius);
+}
+
 static void VGCCApply(UIView *slider) {
     VGCCSliderState *state = VGCCState(slider);
     if (state.applying || state.layoutDepth || state.radiusDepth) return;
+    SEL getter = NSSelectorFromString(@"continuousSliderCornerRadius");
+    SEL setter = NSSelectorFromString(@"setContinuousSliderCornerRadius:");
+    if (![slider respondsToSelector:getter] || ![slider respondsToSelector:setter]) return;
     state.applying = YES;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
     VGCCRestoreSurfaces(state);
     BOOL active = VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5) && VGCCIsExpanded(slider);
     CGFloat radius = active ? VGCCRadius(slider) : 0;
     if (radius > 0) {
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        // Do not change the native slider-radius model: the module reassigns it
-        // during layout. Synchronize the existing surfaces without adding layers.
+        if (!state.modelOverridden) {
+            state.nativeRadius = ((CGFloat (*)(id, SEL))objc_msgSend)(slider, getter);
+            state.hasNativeRadius = YES;
+        }
+        // The track radius is a layout INPUT, not just an outer layer style.
+        // Let Apple's layout compute its native fill length and clipping using
+        // the same fixed radius as the background, at every value including 0.
+        CGFloat current = ((CGFloat (*)(id, SEL))objc_msgSend)(slider, getter);
+        if (fabs(current-radius) > 0.01) {
+            state.modelOverridden = YES;
+            ((void (*)(id, SEL, CGFloat))objc_msgSend)(slider, setter, radius);
+            // Guarded synchronous native layout: no recursive Apply, no stale
+            // frame using the old native fill geometry behind the new outline.
+            ((void (*)(id, SEL))objc_msgSend)(slider, @selector(layoutSubviews));
+        }
         for (UIView *surface in VGCCSurfaces(slider))
-            VGCCRoundSurface(surface, radius, state.surfaceSnapshots);
+            VGCCRoundSurface(surface, radius, state.surfaceSnapshots,
+                surface != slider && ![slider isDescendantOfView:surface]);
         state.applied = state.surfaceSnapshots.count > 0;
-        [CATransaction commit];
+    } else {
+        BOOL needsNativeLayout = state.modelOverridden;
+        VGCCRestoreNativeModel(slider, state);
+        if (needsNativeLayout)
+            ((void (*)(id, SEL))objc_msgSend)(slider, @selector(layoutSubviews));
     }
+    [CATransaction commit];
     state.applying = NO;
 }
 
@@ -328,9 +345,15 @@ void VGInstallControlCenterHooks(void) {
         __block IMP nextLayout = NULL;
         IMP layoutHook = imp_implementationWithBlock(^(UIView *slider) {
             VGCCSliderState *state = VGCCState(slider);
-            if (!state.layoutDepth && !state.applying) {
+            if (state.applying) {
+                ((void (*)(id, SEL))nextLayout)(slider, layout);
+                return;
+            }
+            if (!state.layoutDepth) {
                 state.applying = YES;
                 VGCCRestoreSurfaces(state);
+                BOOL active = VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5) && VGCCIsExpanded(slider);
+                if (!active) VGCCRestoreNativeModel(slider, state);
                 state.applying = NO;
             }
             state.layoutDepth++;
@@ -345,13 +368,22 @@ void VGInstallControlCenterHooks(void) {
                 ((void (*)(id, SEL, CGFloat))nextRadius)(slider, radius, value);
                 return;
             }
+            CGFloat effective = value;
             if (!state.radiusDepth) {
                 state.applying = YES;
                 VGCCRestoreSurfaces(state);
                 state.applying = NO;
+                state.nativeRadius = value;
+                state.hasNativeRadius = YES;
+                BOOL active = VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5) && VGCCIsExpanded(slider);
+                CGFloat configured = active ? VGCCRadius(slider) : 0;
+                if (configured > 0) effective = configured;
+                state.modelOverridden = fabs(effective-value) > 0.01;
             }
+            // A subclass passes the already-resolved value through super.
+            // Never record that effective value as the module's original one.
             state.radiusDepth++;
-            ((void (*)(id, SEL, CGFloat))nextRadius)(slider, radius, value);
+            ((void (*)(id, SEL, CGFloat))nextRadius)(slider, radius, effective);
             state.radiusDepth--;
             if (!state.radiusDepth) VGCCApply(slider);
         });
