@@ -171,5 +171,5 @@ __attribute__((constructor)) static void VGInit(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         VGInstallControlCenterHooks();
     });
-    VGLog(@"VolumeGlass 0.4.7 loaded (fixed 100%%, no preferences)");
+    VGLog(@"VolumeGlass 0.4.9 loaded (fixed 100%%, no preferences)");
 }
