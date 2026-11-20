@@ -84,6 +84,22 @@ static BOOL VGCCIsExpanded(UIView *slider) {
     return NO;
 }
 
+// Use the same outline before and after expansion, so UIKit does not
+// capture a compact rounded rectangle as the transition's starting shape.
+static BOOL VGCCShouldRound(UIView *slider) {
+    if (VGCCIsExpanded(slider)) return YES;
+    BOOL target = NO;
+    BOOL inModule = NO;
+    for (UIResponder *r = slider.nextResponder; r; r = r.nextResponder) {
+        if (VGCCIsKind(r, "CCUIDisplayModuleViewController") ||
+            VGCCIsKind(r, "MRUVolumeViewController") ||
+            VGCCIsKind(r, "MediaControlsVolumeViewController")) target = YES;
+        if (VGCCIsKind(r, "CCUIContentModuleContentContainerView")) inModule = YES;
+        if (target && inModule) return YES;
+    }
+    return NO;
+}
+
 static CGFloat VGCCRadius(UIView *slider) {
     CGSize size = slider.bounds.size;
     CGFloat half = MIN(size.width, size.height) * 0.5;
@@ -200,6 +216,67 @@ static NSArray<UIView *> *VGCCSurfaces(UIView *slider) {
     return targets.array;
 }
 
+// UIKit can bundle radius with position, bounds and opacity. Strip only
+// the radius leaf, and keep the group's timing and other child animations.
+static CAAnimation *VGCCWithoutRadiusAnimation(CAAnimation *animation) {
+    if ([animation isKindOfClass:CAPropertyAnimation.class] &&
+        [((CAPropertyAnimation *)animation).keyPath isEqualToString:@"cornerRadius"]) return nil;
+    if (![animation isKindOfClass:CAAnimationGroup.class]) return animation;
+    CAAnimationGroup *group = (CAAnimationGroup *)animation;
+    NSMutableArray<CAAnimation *> *children = [NSMutableArray array];
+    BOOL changed = NO;
+    for (CAAnimation *child in group.animations) {
+        CAAnimation *filtered = VGCCWithoutRadiusAnimation(child);
+        if (filtered != child) changed = YES;
+        if (filtered) [children addObject:filtered];
+    }
+    if (!changed) return group;
+    CAAnimationGroup *filtered = [group copy];
+    filtered.animations = children;
+    return filtered;
+}
+
+static BOOL VGCCContainsRadiusAnimation(CAAnimation *animation) {
+    if ([animation isKindOfClass:CAPropertyAnimation.class] &&
+        [((CAPropertyAnimation *)animation).keyPath isEqualToString:@"cornerRadius"]) return YES;
+    if (![animation isKindOfClass:CAAnimationGroup.class]) return NO;
+    for (CAAnimation *child in ((CAAnimationGroup *)animation).animations)
+        if (VGCCContainsRadiusAnimation(child)) return YES;
+    return NO;
+}
+
+static BOOL VGCCLayerBelongsToTrackedSlider(CALayer *layer) {
+    for (UIView *slider in VGCCSliders.allObjects) {
+        for (CALayer *current = layer; current; current = current.superlayer)
+            if (current == slider.layer) return YES;
+    }
+    return NO;
+}
+
+static void (*VGCCOriginalAddAnimation)(id, SEL, CAAnimation *, NSString *);
+static void VGCCAddAnimation(CALayer *layer, SEL selector, CAAnimation *animation, NSString *key) {
+    if (animation && VGCCContainsRadiusAnimation(animation) &&
+        VGCCLayerBelongsToTrackedSlider(layer)) {
+        CAAnimation *filtered = VGCCWithoutRadiusAnimation(animation);
+        if (!filtered) return;
+        VGCCOriginalAddAnimation(layer, selector, filtered, key);
+        return;
+    }
+    VGCCOriginalAddAnimation(layer, selector, animation, key);
+}
+
+static BOOL VGCCHasMethod(Class cls, SEL selector);
+
+static void VGCCInstallAnimationHook(void) {
+    static BOOL installed = NO;
+    if (installed) return;
+    Class layer = objc_getClass("CALayer");
+    SEL selector = @selector(addAnimation:forKey:);
+    if (!layer || !VGCCHasMethod(layer, selector)) return;
+    MSHookMessageEx(layer, selector, (IMP)VGCCAddAnimation, (IMP *)&VGCCOriginalAddAnimation);
+    installed = VGCCOriginalAddAnimation != NULL;
+}
+
 static void VGCCRoundSurface(UIView *view, CGFloat radius, NSMutableArray *snapshots, BOOL clip) {
     CGFloat half = MIN(view.bounds.size.width, view.bounds.size.height) * 0.5;
     if (half <= 0.5) return;
@@ -222,6 +299,13 @@ static void VGCCRoundSurface(UIView *view, CGFloat radius, NSMutableArray *snaps
     [snapshots addObject:snapshot];
     view.layer.cornerRadius = MIN(radius, half-0.5);
     view.layer.cornerCurve = kCACornerCurveCircular;
+    for (NSString *key in view.layer.animationKeys) {
+        CAAnimation *animation = [view.layer animationForKey:key];
+        CAAnimation *filtered = VGCCWithoutRadiusAnimation(animation);
+        if (filtered == animation) continue;
+        if (filtered) [view.layer addAnimation:filtered forKey:key];
+        else [view.layer removeAnimationForKey:key];
+    }
     // Never add another clipping boundary over the native fill geometry.
     if (clip) view.layer.masksToBounds = YES;
     // Same fix used for the side HUD: remove the native shadow/border chrome,
@@ -273,7 +357,7 @@ static void VGCCApply(UIView *slider) {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     VGCCRestoreSurfaces(state);
-    BOOL active = VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5) && VGCCIsExpanded(slider);
+    BOOL active = VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5) && VGCCShouldRound(slider);
     CGFloat radius = active ? VGCCRadius(slider) : 0;
     if (radius > 0) {
         if (!state.modelOverridden) {
@@ -324,6 +408,7 @@ static void VGCCImageLoaded(const struct mach_header *header, intptr_t slide) {
     if (!dladdr(header, &info) || !info.dli_fname) return;
     if (!strstr(info.dli_fname, "/ControlCenterUIKit.framework/") &&
         !strstr(info.dli_fname, "/MediaControls.framework/") &&
+        !strstr(info.dli_fname, "/ControlCenterUI.framework/") &&
         !strstr(info.dli_fname, "/DisplayModule.bundle/")) return;
     // Loader callbacks must not create UIKit objects or install hooks in-lock.
     dispatch_async(dispatch_get_main_queue(), ^{ VGInstallControlCenterHooks(); });
@@ -336,6 +421,7 @@ void VGInstallControlCenterHooks(void) {
         _dyld_register_func_for_add_image(VGCCImageLoaded);
     }
     if (!VGCCSliders) VGCCSliders = [NSHashTable weakObjectsHashTable];
+    VGCCInstallAnimationHook();
     if (!VGCCInstalledClasses) VGCCInstalledClasses = [NSMutableSet set];
     // MRU overrides both methods on iOS 16; bind a distinct next IMP at each
     // installation and apply only after the outermost subclass/super layout.
@@ -355,7 +441,7 @@ void VGInstallControlCenterHooks(void) {
             if (!state.layoutDepth) {
                 state.applying = YES;
                 VGCCRestoreSurfaces(state);
-                BOOL active = VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5) && VGCCIsExpanded(slider);
+                BOOL active = VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5) && VGCCShouldRound(slider);
                 if (!active) {
                     VGCCRestoreNativeModel(slider, state);
                 } else {
@@ -399,7 +485,7 @@ void VGInstallControlCenterHooks(void) {
                 state.applying = NO;
                 state.nativeRadius = value;
                 state.hasNativeRadius = YES;
-                BOOL active = VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5) && VGCCIsExpanded(slider);
+                BOOL active = VGEnabled() && (VGAutoCapsule() || VGRadius() > 0.5) && VGCCShouldRound(slider);
                 CGFloat configured = active ? VGCCRadius(slider) : 0;
                 if (configured > 0) effective = configured;
                 state.modelOverridden = fabs(effective-value) > 0.01;
@@ -419,6 +505,8 @@ void VGInstallControlCenterHooks(void) {
     // layout. These are real module/view APIs, not the iOS 17 slider callback.
     for (NSArray<NSString *> *entry in @[
         @[@"CCUIDisplayModuleViewController", @"willTransitionToExpandedContentMode:"],
+        @[@"CCUIDisplayModuleViewController", @"didTransitionToExpandedContentMode:"],
+        @[@"MRUVolumeViewController", @"didTransitionToExpandedContentMode:"],
         @[@"MediaControlsVolumeViewController", @"willTransitionToExpandedContentMode:"],
         @[@"MRUVolumeView", @"setExpanded:"]]) {
         NSString *key = [entry componentsJoinedByString:@"|"];
@@ -435,6 +523,7 @@ void VGInstallControlCenterHooks(void) {
             for (UIView *slider in VGCCSliders.allObjects) {
                 for (UIResponder *r = slider; r; r = r.nextResponder) {
                     if (r != owner) continue;
+                    VGCCApply(slider);
                     [slider setNeedsLayout];
                     break;
                 }
@@ -442,6 +531,51 @@ void VGInstallControlCenterHooks(void) {
         });
         MSHookMessageEx(cls, selector, hook, &next);
         [VGCCInstalledClasses addObject:key];
+    }
+    // The module platter has its OWN corner-radius input. Changing only the
+    // slider leaves that background at the old rounded rectangle until a value
+    // change happens to trigger another layout pass. Supply the expanded shape
+    // to the module host at the source, before it builds its transition.
+    for (NSString *name in @[@"CCUIDisplayModuleViewController", @"MRUVolumeViewController", @"MediaControlsVolumeViewController"]) {
+        NSString *key = [name stringByAppendingString:@"|expandedPlatterRadius"];
+        if ([VGCCInstalledClasses containsObject:key]) continue;
+        Class cls = objc_getClass(name.UTF8String);
+        SEL selector = NSSelectorFromString(@"preferredExpandedContinuousCornerRadius");
+        SEL widthSelector = NSSelectorFromString(@"preferredExpandedContentWidth");
+        SEL heightSelector = NSSelectorFromString(@"preferredExpandedContentHeight");
+        if (!cls || !VGCCHasMethod(cls, selector) || !VGCCHasMethod(cls, widthSelector) || !VGCCHasMethod(cls, heightSelector)) continue;
+        __block IMP next = NULL;
+        IMP hook = imp_implementationWithBlock(^CGFloat(id owner) {
+            CGFloat original = ((CGFloat (*)(id, SEL))next)(owner, selector);
+            CGFloat width = ((CGFloat (*)(id, SEL))objc_msgSend)(owner, widthSelector);
+            CGFloat height = ((CGFloat (*)(id, SEL))objc_msgSend)(owner, heightSelector);
+            if (!isfinite(width) || !isfinite(height) || width <= 1 || height <= 1) return original;
+            return MAX(0, MIN(width, height) * 0.5 - 0.5);
+        });
+        MSHookMessageEx(cls, selector, hook, &next);
+        [VGCCInstalledClasses addObject:key];
+    }
+    // Host container layout can reset _moduleMaterialView AFTER the child
+    // slider has already applied its surfaces. Reconcile after that exact host,
+    // not via touch events or a recurring timer, and never touch other modules.
+    {
+        NSString *key = @"CCUIContentModuleContentContainerView|layout";
+        Class cls = objc_getClass("CCUIContentModuleContentContainerView");
+        SEL selector = @selector(layoutSubviews);
+        if (cls && ![VGCCInstalledClasses containsObject:key] && VGCCHasMethod(cls, selector)) {
+            __block IMP next = NULL;
+            IMP hook = imp_implementationWithBlock(^(UIView *container) {
+                ((void (*)(id, SEL))next)(container, selector);
+                for (UIView *slider in VGCCSliders.allObjects) {
+                    if (![slider isDescendantOfView:container]) continue;
+                    VGCCSliderState *state = VGCCState(slider);
+                    if (state.applying || state.layoutDepth || state.radiusDepth) continue;
+                    VGCCApply(slider);
+                }
+            });
+            MSHookMessageEx(cls, selector, hook, &next);
+            [VGCCInstalledClasses addObject:key];
+        }
     }
     // The brightness extension assigns its sibling-material radius during the
     // controller layout. Reconcile only that controller's sliders afterwards.
