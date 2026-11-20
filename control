@@ -1,6 +1,6 @@
 Package: com.shiyi.volumeglass
 Name: 音量玻璃
-Version: 0.4.7
+Version: 0.4.11
 Architecture: iphoneos-arm
 Description: 系统音量 HUD 与控制中心展开滑条圆角
  安装即启用，固定为原圆角设置的 100%，不提供设置面板。
